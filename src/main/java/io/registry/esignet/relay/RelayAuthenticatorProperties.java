@@ -391,12 +391,31 @@ public class RelayAuthenticatorProperties {
     private Psut psut = new Psut();
     private Kyc kyc = new Kyc();
 
+    /**
+     * Minimal claim list used as the account-check probe in {@code doKycAuth}. This proves the
+     * subject exists/releasable WITHOUT fetching demographics before consent. Defaults to a single
+     * {@code individual_id} claim (an identifier-echo profile choice for a trusted caller). Bound
+     * from {@code registry.esignet.account-check-claims}.
+     */
+    private List<String> accountCheckClaims = List.of("individual_id");
+
     public Auth getAuth() {
       return auth;
     }
 
     public void setAuth(Auth auth) {
       this.auth = auth;
+    }
+
+    public List<String> getAccountCheckClaims() {
+      return accountCheckClaims;
+    }
+
+    public void setAccountCheckClaims(List<String> accountCheckClaims) {
+      this.accountCheckClaims =
+          accountCheckClaims == null || accountCheckClaims.isEmpty()
+              ? List.of("individual_id")
+              : accountCheckClaims;
     }
 
     public KycToken getKycToken() {
@@ -433,6 +452,8 @@ public class RelayAuthenticatorProperties {
           + psut
           + ", kyc="
           + kyc
+          + ", accountCheckClaims="
+          + accountCheckClaims
           + "}";
     }
 
