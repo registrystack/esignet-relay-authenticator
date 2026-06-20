@@ -361,13 +361,52 @@ registry.esignet.kyc-token.hmac-secret=${REGISTRY_ESIGNET_KYC_TOKEN_SECRET}
 registry.esignet.kyc-token.ttl-seconds=300
 registry.esignet.psut.hmac-secret=${REGISTRY_ESIGNET_PSUT_SECRET}
 
+# Claim mapping (eSignet/OIDC UserInfo claim name -> Relay source token).
+# $psut marks a protocol-derived claim (the PSUT) supplied locally, never requested from Relay.
+# Dotted keys bind via claim-map[<dotted.name>]. Defaults to the map below when unset.
+registry.esignet.claim-map.sub=$psut
+registry.esignet.claim-map.individual_id=individual_id
+registry.esignet.claim-map.name=name
+registry.esignet.claim-map.given_name=given_name
+registry.esignet.claim-map.family_name=family_name
+registry.esignet.claim-map.birthdate=birthdate
+registry.esignet.claim-map.gender=gender
+registry.esignet.claim-map[address.region]=address.region
+
 # KYC/UserInfo serialization and signing
 registry.esignet.kyc.response-mode=self-contained-jws
+# algorithm (default RS256) and keystore-type (default PKCS12) are optional.
+registry.esignet.kyc.signing.algorithm=RS256
+registry.esignet.kyc.signing.keystore-type=PKCS12
 registry.esignet.kyc.signing.keystore-path=${REGISTRY_ESIGNET_KYC_KEYSTORE_PATH}
 registry.esignet.kyc.signing.keystore-password=${REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD}
 registry.esignet.kyc.signing.key-alias=${REGISTRY_ESIGNET_KYC_KEY_ALIAS}
 registry.esignet.kyc.signing.key-password=${REGISTRY_ESIGNET_KYC_KEY_PASSWORD}
 ```
+
+> **M6 implemented (2026-06-20):** the claim mapper, the RS256 JWS signer + signing
+> keystore loader, and `getAllKycSigningCertificates`.
+>
+> - **Algorithm:** `RS256` (configurable via `registry.esignet.kyc.signing.algorithm`,
+>   published in the JWS header `alg`).
+> - **`kid` scheme:** `base64url(SHA-256(RFC 7638 JWK thumbprint))` of the RSA public
+>   key — the canonical JSON is `{"e":...,"kty":"RSA","n":...}` with `e`/`n` as
+>   minimal-length base64url-encoded big-endian integers. The same key always yields the
+>   same `kid`; the JWS header `kid` equals the `keyId` returned by
+>   `getAllKycSigningCertificates`.
+> - **JWE fail-closed:** a JWE `userInfoResponseType` throws a checked
+>   `UserInfoPackagingException` with stable code `relay_kyc_jwe_unsupported` and emits no
+>   token. The RP encryption key is not available to the plugin (not in `KycExchangeDto`
+>   nor any eSignet `1.8.0` integration runtime API), so per spec we must not return
+>   unencrypted data for a JWE request. Supplying the RP encryption JWK/cert via the
+>   exchange DTO or an integration API would unblock real JWE.
+> - **New properties:** `registry.esignet.claim-map.*`, `registry.relay.default-claims`
+>   (the profile-declared claim set, now bound), `registry.esignet.kyc.signing.algorithm`,
+>   `registry.esignet.kyc.signing.keystore-type`.
+> - **Signing material in tests:** tests generate an RSA-2048 keypair + self-signed X.509
+>   cert (BouncyCastle, test scope only) into an in-memory keystore fed to the same
+>   production `KycSigningKeyService` keystore constructor. Main code is pure JDK crypto;
+>   no committed keys or keystores.
 
 Important behavior:
 
@@ -624,6 +663,10 @@ relay_auth_rp_encryption_key_unavailable
 relay_kyc_exchange_failed
 relay_kyc_signing_failed
 relay_kyc_encryption_failed
+
+# M6 packaging / signing (implemented)
+relay_kyc_jwe_unsupported           # JWE requested but RP encryption key unavailable -> fail closed
+relay_kyc_signing_unavailable       # getAllKycSigningCertificates: signing keystore/key unavailable
 ```
 
 Guidelines:

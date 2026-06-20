@@ -6,7 +6,9 @@ import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -399,6 +401,28 @@ public class RelayAuthenticatorProperties {
      */
     private List<String> accountCheckClaims = List.of("individual_id");
 
+    /**
+     * eSignet/OIDC UserInfo claim name -&gt; Relay source token. Bound from
+     * {@code registry.esignet.claim-map.*}. Dotted keys such as {@code address.region} bind via
+     * {@code registry.esignet.claim-map[address.region]}. The reserved source token {@code $psut}
+     * marks a protocol-derived claim (the partner-specific subject) that is populated locally and
+     * NEVER requested from Relay. Defaults to the spec example mapping when unset.
+     */
+    private Map<String, String> claimMap = defaultClaimMap();
+
+    private static Map<String, String> defaultClaimMap() {
+      Map<String, String> map = new LinkedHashMap<>();
+      map.put("sub", "$psut");
+      map.put("individual_id", "individual_id");
+      map.put("name", "name");
+      map.put("given_name", "given_name");
+      map.put("family_name", "family_name");
+      map.put("birthdate", "birthdate");
+      map.put("gender", "gender");
+      map.put("address.region", "address.region");
+      return Collections.unmodifiableMap(map);
+    }
+
     public Auth getAuth() {
       return auth;
     }
@@ -416,6 +440,16 @@ public class RelayAuthenticatorProperties {
           accountCheckClaims == null || accountCheckClaims.isEmpty()
               ? List.of("individual_id")
               : accountCheckClaims;
+    }
+
+    public Map<String, String> getClaimMap() {
+      return claimMap;
+    }
+
+    public void setClaimMap(Map<String, String> claimMap) {
+      // Empty map means "no mapping" (the operator explicitly cleared it); only null falls back
+      // to the spec default so an unset binding still ships a sensible mapping.
+      this.claimMap = claimMap == null ? defaultClaimMap() : claimMap;
     }
 
     public KycToken getKycToken() {
@@ -454,6 +488,8 @@ public class RelayAuthenticatorProperties {
           + kyc
           + ", accountCheckClaims="
           + accountCheckClaims
+          + ", claimMap="
+          + claimMap
           + "}";
     }
 
@@ -622,12 +658,25 @@ public class RelayAuthenticatorProperties {
       /**
        * {@code registry.esignet.kyc.signing.*} group. Keystore and key passwords are redacted from
        * logging.
+       *
+       * <p>{@code algorithm} is the JWS signing algorithm (default {@code RS256}); it is published in
+       * the JWS header and must match the algorithm reported alongside the signing certificate.
+       * {@code keystoreType} is the JDK {@link java.security.KeyStore} type used to open the keystore
+       * file (default {@code PKCS12}; {@code JKS} is also supported).
        */
       public static class Signing {
+        /** Default JWS signing algorithm. */
+        public static final String DEFAULT_ALGORITHM = "RS256";
+
+        /** Default keystore type. */
+        public static final String DEFAULT_KEYSTORE_TYPE = "PKCS12";
+
         private String keystorePath;
         private String keystorePassword;
         private String keyAlias;
         private String keyPassword;
+        private String algorithm = DEFAULT_ALGORITHM;
+        private String keystoreType = DEFAULT_KEYSTORE_TYPE;
 
         public String getKeystorePath() {
           return keystorePath;
@@ -661,6 +710,24 @@ public class RelayAuthenticatorProperties {
           this.keyPassword = keyPassword;
         }
 
+        public String getAlgorithm() {
+          return algorithm;
+        }
+
+        public void setAlgorithm(String algorithm) {
+          this.algorithm =
+              algorithm == null || algorithm.isBlank() ? DEFAULT_ALGORITHM : algorithm;
+        }
+
+        public String getKeystoreType() {
+          return keystoreType;
+        }
+
+        public void setKeystoreType(String keystoreType) {
+          this.keystoreType =
+              keystoreType == null || keystoreType.isBlank() ? DEFAULT_KEYSTORE_TYPE : keystoreType;
+        }
+
         @Override
         public String toString() {
           return "Signing{keystorePath="
@@ -671,6 +738,10 @@ public class RelayAuthenticatorProperties {
               + keyAlias
               + ", keyPassword="
               + (keyPassword == null ? "null" : REDACTED)
+              + ", algorithm="
+              + algorithm
+              + ", keystoreType="
+              + keystoreType
               + "}";
         }
       }

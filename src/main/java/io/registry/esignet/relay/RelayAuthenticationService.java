@@ -19,11 +19,18 @@ import io.mosip.esignet.api.spi.Authenticator;
 import io.registry.esignet.relay.auth.ChallengeVerificationException;
 import io.registry.esignet.relay.auth.ChallengeVerifier;
 import io.registry.esignet.relay.auth.SendOtpOutcome;
+import io.registry.esignet.relay.kyc.ClaimMapper;
+import io.registry.esignet.relay.kyc.KycSigningKeyService;
 import io.registry.esignet.relay.kyc.KycTokenService;
+import io.registry.esignet.relay.kyc.UserInfoSigner;
 import io.registry.esignet.relay.relay.RelayAttributeReleaseClient;
 import io.registry.esignet.relay.relay.RelayReleaseError;
 import io.registry.esignet.relay.relay.RelayReleaseException;
+import java.security.cert.X509Certificate;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,13 +46,17 @@ import org.springframework.stereotype.Component;
  *
  * <p>Loaded by eSignet only when {@code mosip.esignet.integration.authenticator} equals
  * {@link #BEAN_NAME}. Its collaborators ({@link ChallengeVerifier},
- * {@link RelayAttributeReleaseClient}, {@link KycTokenService}) are produced by
+ * {@link RelayAttributeReleaseClient}, {@link KycTokenService}, {@link ClaimMapper},
+ * {@link UserInfoSigner}, {@link KycSigningKeyService}) are produced by
  * {@link RelayAuthenticatorConfiguration} under the same conditional gate and injected here.
  *
  * <p><b>M5 implements:</b> {@link #doKycAuth(String, String, KycAuthDto)}, its
  * {@code claimsMetadataRequired} overload, {@link #sendOtp}, and {@link #isSupportedOtpChannel}.
- * {@code doKycExchange} / {@code doVerifiedKycExchange} / {@code getAllKycSigningCertificates}
- * remain stubbed for later milestones.
+ *
+ * <p><b>M6 implements:</b> {@link #getAllKycSigningCertificates()}, returning the X.509 certificate
+ * for the JWS signing key with a {@code keyId} that matches the JWS header {@code kid}.
+ * {@code doKycExchange} / {@code doVerifiedKycExchange} remain stubbed for M7; the M6 building blocks
+ * ({@link ClaimMapper}, {@link UserInfoSigner}, {@link KycSigningKeyService}) are wired and ready.
  *
  * <p><b>doKycAuth flow:</b> validate input → verify the challenge (no Relay call if it fails) →
  * account-check via Relay with the configured minimal claim list (default {@code ["individual_id"]},
@@ -78,11 +89,15 @@ public class RelayAuthenticationService implements Authenticator {
   static final String ERR_CONFIG_PURPOSE_REQUIRED = "relay_config_purpose_required";
   static final String ERR_CONFIG_PURPOSE_DENIED = "relay_config_purpose_denied";
   static final String ERR_SEND_OTP_FAILED = "relay_send_otp_failed";
+  static final String ERR_KYC_SIGNING_UNAVAILABLE = "relay_kyc_signing_unavailable";
 
   private final RelayAuthenticatorProperties properties;
   private final ChallengeVerifier challengeVerifier;
   private final RelayAttributeReleaseClient relayClient;
   private final KycTokenService kycTokenService;
+  private final ClaimMapper claimMapper;
+  private final UserInfoSigner userInfoSigner;
+  private final KycSigningKeyService signingKeyService;
 
   /**
    * Spring constructor injection. Collaborators are produced by
@@ -92,17 +107,69 @@ public class RelayAuthenticationService implements Authenticator {
    * @param challengeVerifier the configured challenge verifier
    * @param relayClient the Relay attribute-release client
    * @param kycTokenService the internal KYC token issuer/verifier and PSUT deriver
+   * @param claimMapper the config-driven claim mapper (request planning + response mapping)
+   * @param userInfoSigner the UserInfo/KYC JWS signer and response-type packager
+   * @param signingKeyService the KYC signing-key service (private key + cert + kid)
    */
   @Autowired
   public RelayAuthenticationService(
       RelayAuthenticatorProperties properties,
       ChallengeVerifier challengeVerifier,
       RelayAttributeReleaseClient relayClient,
-      KycTokenService kycTokenService) {
+      KycTokenService kycTokenService,
+      ClaimMapper claimMapper,
+      UserInfoSigner userInfoSigner,
+      KycSigningKeyService signingKeyService) {
     this.properties = Objects.requireNonNull(properties, "properties");
     this.challengeVerifier = Objects.requireNonNull(challengeVerifier, "challengeVerifier");
     this.relayClient = Objects.requireNonNull(relayClient, "relayClient");
     this.kycTokenService = Objects.requireNonNull(kycTokenService, "kycTokenService");
+    this.claimMapper = Objects.requireNonNull(claimMapper, "claimMapper");
+    this.userInfoSigner = Objects.requireNonNull(userInfoSigner, "userInfoSigner");
+    this.signingKeyService = Objects.requireNonNull(signingKeyService, "signingKeyService");
+  }
+
+  /**
+   * Backward-compatible test/convenience constructor that derives the M6 collaborators from
+   * {@code properties}: a {@link ClaimMapper} from the configured claim map, and a TOLERANT
+   * {@link KycSigningKeyService} (keystore opened lazily) with its {@link UserInfoSigner}. The
+   * signing path therefore only fails when {@link #getAllKycSigningCertificates()} (or future
+   * exchange signing) is actually invoked without a usable keystore — auth-only flows still work.
+   *
+   * @param properties validated plugin configuration
+   * @param challengeVerifier the configured challenge verifier
+   * @param relayClient the Relay attribute-release client
+   * @param kycTokenService the internal KYC token issuer/verifier and PSUT deriver
+   */
+  public RelayAuthenticationService(
+      RelayAuthenticatorProperties properties,
+      ChallengeVerifier challengeVerifier,
+      RelayAttributeReleaseClient relayClient,
+      KycTokenService kycTokenService) {
+    this(
+        properties,
+        challengeVerifier,
+        relayClient,
+        kycTokenService,
+        new ClaimMapper(properties),
+        KycSigningKeyService.lazyFromProperties(properties));
+  }
+
+  private RelayAuthenticationService(
+      RelayAuthenticatorProperties properties,
+      ChallengeVerifier challengeVerifier,
+      RelayAttributeReleaseClient relayClient,
+      KycTokenService kycTokenService,
+      ClaimMapper claimMapper,
+      KycSigningKeyService signingKeyService) {
+    this(
+        properties,
+        challengeVerifier,
+        relayClient,
+        kycTokenService,
+        claimMapper,
+        new UserInfoSigner(signingKeyService),
+        signingKeyService);
   }
 
   // ---------------------------------------------------------------------------
@@ -272,7 +339,58 @@ public class RelayAuthenticationService implements Authenticator {
   }
 
   // ---------------------------------------------------------------------------
-  // Stubbed for later milestones (M6/M7).
+  // getAllKycSigningCertificates (M6)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Returns the single KYC signing certificate matching the JWS signing key. The {@code keyId}
+   * equals the JWS header {@code kid} ({@link KycSigningKeyService#getKid()}), so eSignet can publish
+   * it and relying parties can verify signatures produced by {@link UserInfoSigner}. The certificate
+   * is rendered as PEM and the validity window comes from the certificate's {@code notBefore}/
+   * {@code notAfter}.
+   *
+   * @return a one-element list with the signing certificate
+   * @throws KycSigningCertificateException ({@link #ERR_KYC_SIGNING_UNAVAILABLE}) if the signing
+   *     configuration/keystore is unavailable or invalid
+   */
+  @Override
+  public List<KycSigningCertificateData> getAllKycSigningCertificates()
+      throws KycSigningCertificateException {
+    try {
+      String kid = signingKeyService.getKid();
+      X509Certificate certificate = signingKeyService.getCertificate();
+      String pem = toPem(certificate);
+      ZoneId zone = ZoneId.systemDefault();
+      LocalDateTime issuedAt =
+          LocalDateTime.ofInstant(certificate.getNotBefore().toInstant(), zone);
+      LocalDateTime expiryAt =
+          LocalDateTime.ofInstant(certificate.getNotAfter().toInstant(), zone);
+
+      log.info("getAllKycSigningCertificates served (kid={})", kid);
+      return List.of(new KycSigningCertificateData(kid, pem, expiryAt, issuedAt));
+    } catch (KycSigningCertificateException e) {
+      throw e;
+    } catch (Exception e) {
+      // Signing config/keystore error. Do not leak key material or paths.
+      log.warn("getAllKycSigningCertificates failed: signing key unavailable");
+      throw new KycSigningCertificateException(ERR_KYC_SIGNING_UNAVAILABLE);
+    }
+  }
+
+  /** Renders an X.509 certificate as PEM (base64 DER wrapped in BEGIN/END CERTIFICATE). */
+  private static String toPem(X509Certificate certificate) throws KycSigningCertificateException {
+    try {
+      String base64 =
+          Base64.getMimeEncoder(64, new byte[] {'\n'})
+              .encodeToString(certificate.getEncoded());
+      return "-----BEGIN CERTIFICATE-----\n" + base64 + "\n-----END CERTIFICATE-----\n";
+    } catch (Exception e) {
+      throw new KycSigningCertificateException(ERR_KYC_SIGNING_UNAVAILABLE);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Stubbed for M7.
   // ---------------------------------------------------------------------------
 
   @Override
@@ -287,12 +405,6 @@ public class RelayAuthenticationService implements Authenticator {
       String relyingPartyId, String clientId, VerifiedKycExchangeDto kycExchangeDto)
       throws KycExchangeException {
     throw new KycExchangeException(NOT_IMPLEMENTED);
-  }
-
-  @Override
-  public List<KycSigningCertificateData> getAllKycSigningCertificates()
-      throws KycSigningCertificateException {
-    throw new KycSigningCertificateException(NOT_IMPLEMENTED);
   }
 
   // --- helpers ---

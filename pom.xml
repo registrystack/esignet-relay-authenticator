@@ -24,6 +24,11 @@
 
         <junit.version>5.11.3</junit.version>
         <mockito.version>5.14.2</mockito.version>
+        <!-- TEST SCOPE ONLY. Tests use BouncyCastle to generate an RSA-2048 keypair and a
+             self-signed X.509 certificate and load them into an in-memory KeyStore that exercises
+             KycSigningKeyService / UserInfoSigner through their PRODUCTION code path. There is NO
+             BouncyCastle dependency in main code (main uses pure JDK crypto only). -->
+        <bouncycastle.version>1.78.1</bouncycastle.version>
 
         <maven.compiler.plugin.version>3.13.0</maven.compiler.plugin.version>
         <maven.surefire.plugin.version>3.5.1</maven.surefire.plugin.version>
@@ -88,6 +93,15 @@
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
             <version>${mockito.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- TEST SCOPE ONLY: generates deterministic RSA test keys + self-signed certs for the
+             signing tests. Not on the runtime/main classpath; main code is pure JDK crypto. -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

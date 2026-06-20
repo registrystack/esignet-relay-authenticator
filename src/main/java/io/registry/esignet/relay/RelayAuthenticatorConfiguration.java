@@ -2,7 +2,10 @@ package io.registry.esignet.relay;
 
 import io.registry.esignet.relay.auth.ChallengeVerifier;
 import io.registry.esignet.relay.auth.StaticOtpChallengeVerifier;
+import io.registry.esignet.relay.kyc.ClaimMapper;
+import io.registry.esignet.relay.kyc.KycSigningKeyService;
 import io.registry.esignet.relay.kyc.KycTokenService;
+import io.registry.esignet.relay.kyc.UserInfoSigner;
 import io.registry.esignet.relay.relay.RelayAttributeReleaseClient;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -65,5 +68,43 @@ public class RelayAuthenticatorConfiguration {
   @ConditionalOnMissingBean(KycTokenService.class)
   public KycTokenService kycTokenService(RelayAuthenticatorProperties properties) {
     return new KycTokenService(properties);
+  }
+
+  /**
+   * The config-driven claim mapper (request planning + response mapping). Pure; holds no secrets.
+   *
+   * @param properties validated plugin configuration
+   * @return the claim mapper
+   */
+  @Bean
+  @ConditionalOnMissingBean(ClaimMapper.class)
+  public ClaimMapper claimMapper(RelayAuthenticatorProperties properties) {
+    return new ClaimMapper(properties);
+  }
+
+  /**
+   * The KYC signing-key service. Built TOLERANTLY: the keystore is opened lazily on first
+   * signing/certificate use, so the context still loads when keystore configuration is absent. Only
+   * an actual signing or {@code getAllKycSigningCertificates} call then fails.
+   *
+   * @param properties validated plugin configuration
+   * @return the (lazily-loading) signing-key service
+   */
+  @Bean
+  @ConditionalOnMissingBean(KycSigningKeyService.class)
+  public KycSigningKeyService kycSigningKeyService(RelayAuthenticatorProperties properties) {
+    return KycSigningKeyService.lazyFromProperties(properties);
+  }
+
+  /**
+   * The UserInfo/KYC JWS signer and response-type packager.
+   *
+   * @param signingKeyService the signing-key service
+   * @return the UserInfo signer
+   */
+  @Bean
+  @ConditionalOnMissingBean(UserInfoSigner.class)
+  public UserInfoSigner userInfoSigner(KycSigningKeyService signingKeyService) {
+    return new UserInfoSigner(signingKeyService);
   }
 }
