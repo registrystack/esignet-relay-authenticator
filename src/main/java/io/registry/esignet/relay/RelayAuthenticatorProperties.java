@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -21,6 +22,12 @@ import org.springframework.stereotype.Component;
  * in the plugin spec. Bound via Spring {@link ConfigurationProperties} (Spring is a provided
  * dependency at eSignet runtime). Groups are modelled as nested static classes.
  *
+ * <p>Gated by the same {@link ConditionalOnProperty} as the authenticator and its collaborator graph
+ * ({@code mosip.esignet.integration.authenticator=RelayAuthenticationService}), so in a deployment
+ * that selects a different authenticator this bean is never created and its fail-fast
+ * {@link #validate()} never runs — the plugin stays fully dormant rather than rejecting an unrelated
+ * eSignet configuration at startup.
+ *
  * <p>Security-sensitive fields (Relay bearer token, KYC-token and PSUT HMAC secrets, keystore
  * passwords) are validated fail-fast by {@link #validate()} and are redacted from {@link #toString()}
  * and all logging. The token is ALWAYS transmitted as {@code Authorization: Bearer}; {@code
@@ -28,6 +35,9 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @ConfigurationProperties(prefix = "registry")
+@ConditionalOnProperty(
+    value = "mosip.esignet.integration.authenticator",
+    havingValue = RelayAuthenticationService.BEAN_NAME)
 public class RelayAuthenticatorProperties {
 
   /** Masking marker used wherever a configured secret would otherwise be printed. */
@@ -86,6 +96,14 @@ public class RelayAuthenticatorProperties {
     if (isBlank(ar.accept)) {
       problems.add("registry.relay.attribute-release.accept must be set");
     }
+    // The governed attribute-release profile this plugin targets requires a purpose: Relay rejects a
+    // request with no Data-Purpose (auth.purpose_required). Require it fail-fast so a blank value
+    // cannot lead the client to silently omit the header and turn every release into a 400.
+    if (isBlank(ar.purpose)) {
+      problems.add(
+          "registry.relay.attribute-release.purpose must be set"
+              + " (sent as the Data-Purpose header; required by the governed profile)");
+    }
 
     if (isBlank(relay.subject.idType)) {
       problems.add("registry.relay.subject.id-type must be set");
@@ -124,6 +142,16 @@ public class RelayAuthenticatorProperties {
           "registry.esignet.psut.hmac-secret must be at least "
               + MIN_HMAC_SECRET_LENGTH
               + " characters");
+    }
+    // The two HMAC secrets MUST be distinct. They key independent security domains (the KYC-token
+    // signature vs the PSUT derivation); sharing one key would let a single compromise undermine both
+    // and couple the token and the partner-specific subject. Only compare when both are present so
+    // this does not mask the missing-secret problems reported above.
+    if (!isBlank(esignet.kycToken.hmacSecret)
+        && !isBlank(esignet.psut.hmacSecret)
+        && esignet.kycToken.hmacSecret.equals(esignet.psut.hmacSecret)) {
+      problems.add(
+          "registry.esignet.kyc-token.hmac-secret and registry.esignet.psut.hmac-secret must differ");
     }
 
     // --- Security-sensitive: signing keystore, required only for self-contained-jws ---

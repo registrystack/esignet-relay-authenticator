@@ -1,11 +1,15 @@
 package io.registry.esignet.relay;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 /** M1: typed configuration validation and secret redaction. */
 class RelayAuthenticatorPropertiesTest {
@@ -81,6 +85,64 @@ class RelayAuthenticatorPropertiesTest {
             .anyMatch(
                 p -> p.contains("registry.esignet.psut.hmac-secret") && p.contains("at least")),
         "should reject a non-blank but too-short PSUT HMAC secret");
+  }
+
+  @Test
+  void missingPurposeFailsFast() {
+    RelayAuthenticatorProperties props = TestProperties.valid();
+    props.getRelay().getAttributeRelease().setPurpose(null);
+
+    RelayAuthenticatorConfigException ex =
+        assertThrows(RelayAuthenticatorConfigException.class, props::validate);
+    assertTrue(
+        ex.getProblems().stream()
+            .anyMatch(p -> p.contains("registry.relay.attribute-release.purpose")),
+        "should require the Data-Purpose value fail-fast");
+  }
+
+  @Test
+  void blankPurposeFailsFast() {
+    RelayAuthenticatorProperties props = TestProperties.valid();
+    props.getRelay().getAttributeRelease().setPurpose("   ");
+
+    RelayAuthenticatorConfigException ex =
+        assertThrows(RelayAuthenticatorConfigException.class, props::validate);
+    assertTrue(
+        ex.getProblems().stream()
+            .anyMatch(p -> p.contains("registry.relay.attribute-release.purpose")),
+        "a blank purpose must be rejected, not silently accepted (the client would omit the header)");
+  }
+
+  @Test
+  void identicalHmacSecretsRejected() {
+    RelayAuthenticatorProperties props = TestProperties.valid();
+    // Both are long enough to pass the length floor; the point is that they are equal.
+    String shared = "shared-hmac-secret-0123456789abcdef0123";
+    props.getEsignet().getKycToken().setHmacSecret(shared);
+    props.getEsignet().getPsut().setHmacSecret(shared);
+
+    RelayAuthenticatorConfigException ex =
+        assertThrows(RelayAuthenticatorConfigException.class, props::validate);
+    assertTrue(
+        ex.getProblems().stream().anyMatch(p -> p.contains("must differ")),
+        "the KYC-token and PSUT HMAC secrets must be distinct");
+  }
+
+  @Test
+  void gatedByStandardConditionalProperty() {
+    // The properties bean must carry the same conditional gate as the authenticator, so it is never
+    // created (and its fail-fast validation never runs) when a different authenticator is selected.
+    ConditionalOnProperty condition =
+        RelayAuthenticatorProperties.class.getAnnotation(ConditionalOnProperty.class);
+    assertNotNull(condition, "properties must be gated by @ConditionalOnProperty to stay dormant");
+    assertArrayEquals(
+        new String[] {"mosip.esignet.integration.authenticator"},
+        condition.value(),
+        "must gate on the eSignet authenticator integration property");
+    assertEquals(
+        RelayAuthenticationService.BEAN_NAME,
+        condition.havingValue(),
+        "havingValue must match the bean name so validation only runs when this plugin is selected");
   }
 
   @Test

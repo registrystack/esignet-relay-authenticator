@@ -106,6 +106,10 @@ public class RelayAttributeReleaseClient {
             .header(HDR_ACCEPT, properties.getRelay().getAttributeRelease().getAccept())
             .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
 
+    // Data-Purpose is required by the governed profile and validated non-blank at startup
+    // (RelayAuthenticatorProperties#validate), so in a valid deployment it is always sent. The
+    // null/blank guard here is purely defensive — it avoids emitting a malformed empty header should
+    // the client ever be constructed without that validation (e.g. in isolation).
     String purpose = properties.getRelay().getAttributeRelease().getPurpose();
     if (purpose != null && !purpose.isBlank()) {
       requestBuilder.header(HDR_DATA_PURPOSE, purpose);

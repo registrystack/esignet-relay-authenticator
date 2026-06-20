@@ -23,9 +23,12 @@ mosip.esignet.integration.authenticator=RelayAuthenticationService
 - `scan-base-package` must include `io.registry.esignet.relay` so eSignet
   component-scans the plugin's beans. If you already set this property for other
   plugins, add the package as a comma-separated value.
-- `RelayAuthenticationService` and all its collaborator beans are gated by
+- `RelayAuthenticationService`, all its collaborator beans, **and the
+  `registry.*` properties/validation bean** are gated by
   `@ConditionalOnProperty(mosip.esignet.integration.authenticator=RelayAuthenticationService)`,
-  so any other value (or absence) leaves the plugin completely dormant.
+  so any other value (or absence) leaves the plugin completely dormant — its
+  fail-fast configuration validation does not run and cannot reject an unrelated
+  eSignet deployment that never selected this authenticator.
 
 ---
 
@@ -44,7 +47,7 @@ manager — never hard-coded.
 | `registry.relay.attribute-release.profile-id` | *(required)* | The Relay attribute-release profile id. |
 | `registry.relay.attribute-release.profile-version` | *(required)* | The profile version. |
 | `registry.relay.attribute-release.path-template` | `/v1/attribute-releases/{profile_id}/versions/{version}/resolve` | Must contain `{profile_id}` and `{version}`. |
-| `registry.relay.attribute-release.purpose` | *(optional)* | Sent as the `Data-Purpose` request header when the profile is governed. |
+| `registry.relay.attribute-release.purpose` | *(required)* | Sent as the `Data-Purpose` request header. Required and validated fail-fast: the governed profile rejects a request with no purpose (`auth.purpose_required`), so a blank value is refused at startup rather than silently dropping the header. |
 | `registry.relay.attribute-release.accept` | `application/json` | Response media type. |
 | `registry.relay.subject.id-type` | `national_id` | The `subject.id_type` sent to Relay (identifier-echo profile). |
 | `registry.relay.default-claims` | *(optional)* | Profile-declared claim list used to filter exchange requests to the profile. |
@@ -78,7 +81,7 @@ manager — never hard-coded.
 |---|---|---|
 | `registry.esignet.kyc-token.hmac-secret` | `${REGISTRY_ESIGNET_KYC_TOKEN_SECRET}` | HS256 key for the short-lived internal KYC token. **Must be ≥ 32 characters** (validation fails otherwise); use a high-entropy random value. |
 | `registry.esignet.kyc-token.ttl-seconds` | `300` | KYC token TTL. Keep short (replay mitigation). |
-| `registry.esignet.psut.hmac-secret` | `${REGISTRY_ESIGNET_PSUT_SECRET}` | HMAC key for PSUT derivation. **Must differ** from the KYC token secret and be **≥ 32 characters**. |
+| `registry.esignet.psut.hmac-secret` | `${REGISTRY_ESIGNET_PSUT_SECRET}` | HMAC key for PSUT derivation. **Must differ** from the KYC token secret (enforced fail-fast at startup) and be **≥ 32 characters**. |
 
 ### 2.5 KYC/UserInfo signing (keystore)
 

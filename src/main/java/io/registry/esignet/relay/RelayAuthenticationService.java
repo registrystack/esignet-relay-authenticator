@@ -75,8 +75,10 @@ import org.springframework.stereotype.Component;
  * → return {@link KycAuthResult}.
  *
  * <p><b>doKycExchange flow:</b> validate input → verify the KYC token (no Relay call if the token is
- * bad) → reduce accepted claims to {@code intersection(accepted, profile)} → release via Relay → map
- * into the eSignet UserInfo (subject from the PSUT) → sign as JWS (fail closed on a JWE request).
+ * bad) → fail closed on a JWE request BEFORE any release → reduce accepted claims to
+ * {@code intersection(accepted, profile)} → release via Relay only when that set is non-empty (an
+ * empty set would make Relay return its profile defaults, so it is skipped and nothing is released) →
+ * map into the eSignet UserInfo (subject from the PSUT) → sign as JWS.
  *
  * <p><b>Privacy:</b> logs carry only safe fields (transaction id, client id); never the individual
  * id, OTP, KYC token, bearer token, PSUT, or any released attribute value.
@@ -438,13 +440,14 @@ public class RelayAuthenticationService implements Authenticator {
    * Exchanges a verified KYC token for the consented, profile-filtered UserInfo, packaged as a signed
    * (RS256 JWS) KYC payload eSignet accepts.
    *
-   * <p><b>Flow:</b> validate input → verify the KYC token (no Relay call if the token is bad) →
-   * reduce the eSignet-accepted claims to {@code intersection(accepted, profile)} (protocol-derived
-   * {@code sub}/{@code $psut} are populated locally, never requested) → call Relay attribute release
-   * with that consented list → map the released claims into the eSignet UserInfo with {@code sub}
-   * derived from the PSUT → sign as JWS via {@link UserInfoSigner}. A JWE response request fails
-   * closed ({@link UserInfoSigner#ERR_JWE_UNSUPPORTED}) and emits no token, because the RP encryption
-   * key is not available to the plugin.
+   * <p><b>Flow:</b> validate input → verify the KYC token (no Relay call if the token is bad) → fail
+   * closed on a JWE request BEFORE any release ({@link UserInfoSigner#ERR_JWE_UNSUPPORTED}; the RP
+   * encryption key is not available to the plugin) → reduce the eSignet-accepted claims to
+   * {@code intersection(accepted, profile)} (protocol-derived {@code sub}/{@code $psut} are populated
+   * locally, never requested) → call Relay attribute release with that consented list, but ONLY when
+   * it is non-empty (an empty list would make Relay release its profile defaults, so the call is
+   * skipped and nothing is released) → map the released claims into the eSignet UserInfo with
+   * {@code sub} derived from the PSUT → sign as JWS via {@link UserInfoSigner}.
    *
    * <p><b>Privacy:</b> logs carry only safe fields (transaction id, client id); never the individual
    * id, KYC token, PSUT, released attribute values, or the Relay body.
@@ -511,34 +514,54 @@ public class RelayAuthenticationService implements Authenticator {
         throw new KycExchangeException(ERR_TOKEN_INVALID);
       }
 
-      // 3. Subject identity comes from the verified token, never from the request.
+      // 3. Reject an unsatisfiable JWE response BEFORE any attribute release. The plugin holds no RP
+      //    encryption key, so a JWE request can never be fulfilled; detect it now so we never release
+      //    attributes from Relay only to fail closed afterwards.
+      if (UserInfoSigner.isJweRequested(dto.getUserInfoResponseType())) {
+        log.warn("doKycExchange JWE response requested but unsupported; failing closed before any"
+            + " release (clientId={}, txn={})", clientId, transactionId);
+        throw new KycExchangeException(UserInfoSigner.ERR_JWE_UNSUPPORTED);
+      }
+
+      // 4. Subject identity comes from the verified token, never from the request.
       String subjectValue = claims.getSub();
       String subjectIdType = claims.getSid();
 
-      // 4. Reduce accepted claims to the consented, profile-filtered Relay source list. sub/$psut are
+      // 5. Reduce accepted claims to the consented, profile-filtered Relay source list. sub/$psut are
       //    protocol-derived and populated locally — never requested from Relay.
       List<String> acceptedClaims =
           dto.getAcceptedClaims() == null ? List.of() : dto.getAcceptedClaims();
       List<String> relayClaims = claimMapper.relayClaimsFor(acceptedClaims);
 
-      // 5. Call Relay attribute release with that consented list (the client omits the claims field
-      //    when the list is empty).
-      RelayReleaseResult relayResult;
-      try {
-        relayResult = relayClient.release(subjectValue, relayClaims);
-      } catch (RelayReleaseException e) {
-        throw mapReleaseExceptionForExchange(e, transactionId, clientId);
+      // 6. Release from Relay ONLY when at least one consented, profile-filtered source claim remains.
+      //    An empty list would make the client omit the `claims` field, which Relay treats as "release
+      //    the profile default set" — an over-release the caller never consented to. Skip the call and
+      //    release nothing in that case; the protocol `sub` is still derived locally below.
+      Map<String, Object> releasedClaims;
+      if (relayClaims.isEmpty()) {
+        log.info("doKycExchange: no consented Relay claims after profile filtering; skipping Relay"
+            + " call (clientId={}, txn={})", clientId, transactionId);
+        releasedClaims = Map.of();
+      } else {
+        RelayReleaseResult relayResult;
+        try {
+          relayResult = relayClient.release(subjectValue, relayClaims);
+        } catch (RelayReleaseException e) {
+          throw mapReleaseExceptionForExchange(e, transactionId, clientId);
+        }
+        releasedClaims = relayResult.getClaims();
       }
 
-      // 6. PSUT — the protocol subject the relying party sees.
+      // 7. PSUT — the protocol subject the relying party sees.
       String psut =
           kycTokenService.derivePsut(relyingPartyId, clientId, subjectIdType, subjectValue);
 
-      // 7. Map Relay's released claims into the eSignet UserInfo, sub derived from the PSUT.
+      // 8. Map Relay's released claims into the eSignet UserInfo, sub derived from the PSUT.
       Map<String, Object> userInfo =
-          claimMapper.toUserInfo(relayResult.getClaims(), psut, acceptedClaims);
+          claimMapper.toUserInfo(releasedClaims, psut, acceptedClaims);
 
-      // 8. Package as signed JWS (fail closed on a JWE request; never return unencrypted data).
+      // 9. Package as signed JWS. A JWE request was already rejected in step 3; pack() still guards
+      //    defensively and never returns unencrypted data for a JWE request.
       String serialized;
       try {
         serialized = userInfoSigner.pack(userInfo, dto.getUserInfoResponseType());

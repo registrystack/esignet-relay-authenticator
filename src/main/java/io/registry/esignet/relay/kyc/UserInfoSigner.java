@@ -117,14 +117,28 @@ public class UserInfoSigner {
    */
   public String pack(Map<String, Object> userInfoClaims, String userInfoResponseType)
       throws UserInfoPackagingException {
-    if (userInfoResponseType != null
-        && userInfoResponseType.toUpperCase().contains(JWE_MARKER)) {
+    if (isJweRequested(userInfoResponseType)) {
       // Fail closed: never return unencrypted data for a JWE request.
       throw new UserInfoPackagingException(
           ERR_JWE_UNSUPPORTED,
           "JWE response type requested but the RP encryption key is not available to the plugin");
     }
     return sign(userInfoClaims);
+  }
+
+  /**
+   * Returns whether {@code userInfoResponseType} requests JWE (case-insensitive, contains
+   * {@code "JWE"}). The plugin cannot satisfy a JWE request — the RP encryption key is not available
+   * to it — so callers should detect this BEFORE releasing any attributes from Relay and fail closed,
+   * rather than releasing data and only then discovering it cannot be packaged. {@link #pack} also
+   * guards on this as defense in depth.
+   *
+   * @param userInfoResponseType the eSignet/RP-requested response type, may be {@code null}
+   * @return {@code true} if a JWE response is requested and therefore cannot be satisfied
+   */
+  public static boolean isJweRequested(String userInfoResponseType) {
+    return userInfoResponseType != null
+        && userInfoResponseType.toUpperCase().contains(JWE_MARKER);
   }
 
   private String rsaSign(String signingInput) {

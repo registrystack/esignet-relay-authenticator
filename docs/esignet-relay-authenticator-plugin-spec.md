@@ -553,6 +553,9 @@ Rules:
 - Always include claims required by eSignet for protocol correctness, such as
   `sub`, from plugin-derived values rather than broad Relay reads. Do not request
   protocol-derived claims (`sub`, `$psut`) from Relay.
+- **If the filtered list is empty, do NOT call Relay.** An omitted `claims` field
+  makes Relay release its profile DEFAULTS — an over-release nobody consented to.
+  Skip the release and return only the locally-derived protocol claims (`sub`).
 - Treat Relay's released values as authoritative. The Relay profile may compute
   claims server-side (for example `name` from given + family via CEL); do not
   re-synthesize or override them in the plugin.
@@ -595,13 +598,21 @@ Implementation requirement:
 Suggested exchange flow:
 
 1. Verify the KYC token.
-2. Determine accepted claims from `KycExchangeDto.getAcceptedClaims()`.
-3. Reduce to `intersection(accepted, profile/config-declared)` and add any
+2. If `getUserInfoResponseType()` requests JWE, fail closed **before any Relay
+   release** (the RP encryption key is unavailable, so the request can never be
+   satisfied — releasing first and failing afterwards would leak attributes from
+   Relay even though no token is returned).
+3. Determine accepted claims from `KycExchangeDto.getAcceptedClaims()`.
+4. Reduce to `intersection(accepted, profile/config-declared)` and add any
    protocol-required claims, such as `sub`, from plugin-derived values.
-4. Call Relay attribute release with that consented, profile-filtered claim list.
-5. Map Relay claims into the eSignet UserInfo/KYC payload.
-6. Sign as JWS, then encrypt as JWE when requested by eSignet/RP.
-7. Return `new KycExchangeResult(serializedKyc)`.
+5. Call Relay attribute release with that consented, profile-filtered claim list
+   **only when it is non-empty**. An empty list makes the client omit the
+   `claims` field, which Relay treats as "release the profile DEFAULT set" — an
+   over-release nobody consented to. When the list is empty, skip the Relay call
+   and release nothing; the protocol `sub` is still derived locally.
+6. Map Relay claims into the eSignet UserInfo/KYC payload.
+7. Sign as JWS, then encrypt as JWE when requested by eSignet/RP.
+8. Return `new KycExchangeResult(serializedKyc)`.
 
 For `doVerifiedKycExchange`, implement the method explicitly. If Relay does not
 yet return verified-claims metadata, return the same claim values as

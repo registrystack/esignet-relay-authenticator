@@ -206,10 +206,10 @@ class RelayAuthenticationServiceKycExchangeTest {
     assertTrue(stub.requests().isEmpty(), "Relay must NOT be called when the binding mismatches");
   }
 
-  // --- JWE requested: fail closed, no token ---
+  // --- JWE requested: fail closed BEFORE any release, no token ---
 
   @Test
-  void jweRequestFailsClosedWithNoToken() {
+  void jweRequestFailsClosedBeforeAnyReleaseWithNoToken() {
     stub.setNextResponse(StubResponse.json(200, RelayStubServer.SUCCESS_BODY));
     String token = issueToken();
     KycExchangeDto dto = exchangeDto(token, List.of("individual_id"));
@@ -219,6 +219,41 @@ class RelayAuthenticationServiceKycExchangeTest {
         assertThrows(KycExchangeException.class, () -> service.doKycExchange(RP, CLIENT, dto));
 
     assertEquals("relay_kyc_jwe_unsupported", ex.getErrorCode());
+    assertTrue(
+        stub.requests().isEmpty(),
+        "an unsupported JWE response must be rejected BEFORE any Relay release happens");
+  }
+
+  // --- no consented Relay claim remains: skip Relay, never release profile defaults ---
+
+  @Test
+  void noConsentedRelayClaimSkipsRelayAndReturnsOnlySub() throws Exception {
+    // Accept only protocol-derived `sub` and a mapped-but-non-profile claim (gender). Both reduce out
+    // of the Relay request, leaving an empty source list. The plugin must NOT call Relay — omitting
+    // the claims field would make Relay release its profile DEFAULTS, an over-release nobody consented
+    // to. A response is staged anyway to prove it is never consumed.
+    stub.setNextResponse(StubResponse.json(200, RelayStubServer.SUCCESS_BODY));
+    String token = issueToken();
+    KycExchangeDto dto = exchangeDto(token, List.of("sub", "gender"));
+
+    KycExchangeResult result = service.doKycExchange(RP, CLIENT, dto);
+
+    assertTrue(
+        stub.requests().isEmpty(),
+        "Relay must NOT be called when no consented, profile-filtered claim remains");
+
+    String jws = result.getEncryptedKyc();
+    assertNotNull(jws, "must still return a signed payload carrying the protocol sub");
+    assertTrue(verifyJws(jws), "JWS must verify against the signing cert");
+
+    Map<String, Object> payload =
+        objectMapper.readValue(
+            Base64.getUrlDecoder().decode(jws.split("\\.")[1]),
+            new TypeReference<Map<String, Object>>() {});
+    String expectedPsut = kycTokenService.derivePsut(RP, CLIENT, ID_TYPE, INDIVIDUAL_ID);
+    assertEquals(expectedPsut, payload.get("sub"), "sub must equal the derived PSUT");
+    assertEquals(1, payload.size(), "only sub may be present — no profile defaults released");
+    assertFalse(payload.containsKey("gender"), "a non-profile claim must never be released");
   }
 
   // --- Relay collapsed denial during exchange ---
