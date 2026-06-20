@@ -336,7 +336,7 @@ mosip.esignet.integration.authenticator=RelayAuthenticationService
 registry.relay.base-url=http://registry-relay:8080
 registry.relay.attribute-release.profile-id=esignet-civil-userinfo
 registry.relay.attribute-release.profile-version=v1
-registry.relay.attribute-release.path-template=/v1/attribute-releases/{profileId}/versions/{version}/resolve
+registry.relay.attribute-release.path-template=/v1/attribute-releases/{profile_id}/versions/{version}/resolve
 registry.relay.attribute-release.purpose=https://demo.example.gov/purpose/esignet-identity-verification
 registry.relay.attribute-release.accept=application/json
 registry.relay.subject.id-type=national_id
@@ -434,8 +434,8 @@ It must be tamper-evident and short-lived.
 Suggested format:
 
 - Compact JWS or equivalent HMAC-signed token.
-- Algorithm: HMAC-SHA256 is acceptable for the first implementation if the
-  secret is validated and kept out of code.
+- Algorithm: HS256 (HMAC-SHA256) is acceptable for the first implementation if
+  the secret is validated and kept out of code.
 - Claims:
   - `iss`: `esignet-relay-authenticator`;
   - `aud`: `esignet-kyc-exchange`;
@@ -497,7 +497,7 @@ registry.esignet.claim-map.given_name=given_name
 registry.esignet.claim-map.family_name=family_name
 registry.esignet.claim-map.birthdate=birthdate
 registry.esignet.claim-map.gender=gender
-registry.esignet.claim-map.address.region=address.region
+registry.esignet.claim-map[address.region]=address.region
 ```
 
 Rules:
