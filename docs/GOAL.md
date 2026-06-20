@@ -1,6 +1,6 @@
 # Goal: eSignet Relay Authenticator plugin (v1)
 
-Status: active
+Status: complete — M0–M8 delivered; `mvn -B verify` green (125 tests), plugin JAR builds.
 Owner: implementer working on branch `claude/admiring-brahmagupta-sw2n04`
 Drives: full implementation of this repository
 
@@ -72,6 +72,9 @@ custom OIDC flow outside the Authenticator interface.
 - Keep `mvn test` green at the end of every milestone.
 
 ## Milestones (each independently verifiable)
+
+All milestones M0–M8 are complete; each landed with `mvn test` green and was
+pushed to `claude/admiring-brahmagupta-sw2n04`.
 
 - **M0 — Skeleton + CI.** `pom.xml` (Java 21, `esignet-integration-api`
   provided, JUnit 5/Mockito), package layout, `application.properties`,
