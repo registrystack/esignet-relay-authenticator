@@ -21,11 +21,15 @@ import io.registry.esignet.relay.auth.ChallengeVerifier;
 import io.registry.esignet.relay.auth.SendOtpOutcome;
 import io.registry.esignet.relay.kyc.ClaimMapper;
 import io.registry.esignet.relay.kyc.KycSigningKeyService;
+import io.registry.esignet.relay.kyc.KycTokenClaims;
+import io.registry.esignet.relay.kyc.KycTokenException;
 import io.registry.esignet.relay.kyc.KycTokenService;
+import io.registry.esignet.relay.kyc.UserInfoPackagingException;
 import io.registry.esignet.relay.kyc.UserInfoSigner;
 import io.registry.esignet.relay.relay.RelayAttributeReleaseClient;
 import io.registry.esignet.relay.relay.RelayReleaseError;
 import io.registry.esignet.relay.relay.RelayReleaseException;
+import io.registry.esignet.relay.relay.RelayReleaseResult;
 import java.security.cert.X509Certificate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -55,16 +59,27 @@ import org.springframework.stereotype.Component;
  *
  * <p><b>M6 implements:</b> {@link #getAllKycSigningCertificates()}, returning the X.509 certificate
  * for the JWS signing key with a {@code keyId} that matches the JWS header {@code kid}.
- * {@code doKycExchange} / {@code doVerifiedKycExchange} remain stubbed for M7; the M6 building blocks
- * ({@link ClaimMapper}, {@link UserInfoSigner}, {@link KycSigningKeyService}) are wired and ready.
+ *
+ * <p><b>M7 implements:</b> {@link #doKycExchange(String, String, KycExchangeDto)} and
+ * {@link #doVerifiedKycExchange(String, String, VerifiedKycExchangeDto)}, which verify the KYC token,
+ * request only the consented + profile-filtered claims from Relay, map them into the eSignet UserInfo
+ * (subject from the PSUT), and sign as RS256 JWS via {@link UserInfoSigner}. A JWE response request
+ * fails closed ({@link UserInfoSigner#ERR_JWE_UNSUPPORTED}) and emits no token, because the RP
+ * encryption key is not available to the plugin. The verified variant does NOT synthesize assurance
+ * metadata — Relay V1 returns none and the plugin must not fabricate it — so it currently equals the
+ * standard exchange output.
  *
  * <p><b>doKycAuth flow:</b> validate input → verify the challenge (no Relay call if it fails) →
  * account-check via Relay with the configured minimal claim list (default {@code ["individual_id"]},
  * so NO demographics are released before consent) → derive the PSUT → issue a short-lived KYC token
  * → return {@link KycAuthResult}.
  *
+ * <p><b>doKycExchange flow:</b> validate input → verify the KYC token (no Relay call if the token is
+ * bad) → reduce accepted claims to {@code intersection(accepted, profile)} → release via Relay → map
+ * into the eSignet UserInfo (subject from the PSUT) → sign as JWS (fail closed on a JWE request).
+ *
  * <p><b>Privacy:</b> logs carry only safe fields (transaction id, client id); never the individual
- * id, OTP, KYC token, bearer token, or any released attribute value.
+ * id, OTP, KYC token, bearer token, PSUT, or any released attribute value.
  */
 @Component
 @ConditionalOnProperty(
@@ -77,8 +92,6 @@ public class RelayAuthenticationService implements Authenticator {
 
   private static final Logger log = LoggerFactory.getLogger(RelayAuthenticationService.class);
 
-  private static final String NOT_IMPLEMENTED = "not_implemented";
-
   // --- Internal error codes (see docs/esignet-relay-authenticator-plugin-spec.md) ---
   static final String ERR_INVALID_REQUEST = "relay_auth_invalid_request";
   static final String ERR_CHALLENGE_FAILED = "relay_auth_challenge_failed";
@@ -90,6 +103,10 @@ public class RelayAuthenticationService implements Authenticator {
   static final String ERR_CONFIG_PURPOSE_DENIED = "relay_config_purpose_denied";
   static final String ERR_SEND_OTP_FAILED = "relay_send_otp_failed";
   static final String ERR_KYC_SIGNING_UNAVAILABLE = "relay_kyc_signing_unavailable";
+  static final String ERR_TOKEN_INVALID = "relay_auth_token_invalid";
+  static final String ERR_TOKEN_EXPIRED = "relay_auth_token_expired";
+  static final String ERR_KYC_EXCHANGE_FAILED = "relay_kyc_exchange_failed";
+  static final String ERR_KYC_SIGNING_FAILED = "relay_kyc_signing_failed";
 
   private final RelayAuthenticatorProperties properties;
   private final ChallengeVerifier challengeVerifier;
@@ -259,29 +276,53 @@ public class RelayAuthenticationService implements Authenticator {
     RelayReleaseError error = e.getError();
     log.warn("doKycAuth Relay account-check failed: {} (clientId={}, txn={})", error, clientId,
         transactionId);
+    return new KycAuthException(releaseErrorCode(error));
+  }
+
+  /**
+   * Maps an internal {@link RelayReleaseError} to its stable plugin error code. Branches on the
+   * outcome (which was derived from the RFC 9457 {@code code}, never the HTTP status). Fails closed on
+   * anything unexpected: the collapsed {@link RelayReleaseError#SUBJECT_DENIED}, {@code UNKNOWN}, and
+   * the {@code default} all map to one generic {@link #ERR_SUBJECT_DENIED} denial with no sub-reason.
+   * Shared by {@code doKycAuth} and the KYC-exchange flow so the two stay consistent.
+   */
+  private static String releaseErrorCode(RelayReleaseError error) {
     switch (error) {
       case SUBJECT_DENIED:
         // Single collapsed denial — disclose no sub-reason.
-        return new KycAuthException(ERR_SUBJECT_DENIED);
+        return ERR_SUBJECT_DENIED;
       case UNAVAILABLE:
       case SOURCE_UNAVAILABLE:
-        return new KycAuthException(ERR_RELAY_UNAVAILABLE);
+        return ERR_RELAY_UNAVAILABLE;
       case PROFILE_NOT_FOUND:
-        return new KycAuthException(ERR_CONFIG_PROFILE_NOT_FOUND);
+        return ERR_CONFIG_PROFILE_NOT_FOUND;
       case SCOPE_DENIED:
-        return new KycAuthException(ERR_CONFIG_SCOPE_DENIED);
+        return ERR_CONFIG_SCOPE_DENIED;
       case PURPOSE_REQUIRED:
-        return new KycAuthException(ERR_CONFIG_PURPOSE_REQUIRED);
+        return ERR_CONFIG_PURPOSE_REQUIRED;
       case PURPOSE_DENIED:
-        return new KycAuthException(ERR_CONFIG_PURPOSE_DENIED);
+        return ERR_CONFIG_PURPOSE_DENIED;
       case SUBJECT_INVALID:
         // Bad id type / malformed subject — a local/request validation problem.
-        return new KycAuthException(ERR_INVALID_REQUEST);
+        return ERR_INVALID_REQUEST;
       case UNKNOWN:
       default:
         // Fail closed on anything unexpected; treat as a generic subject denial (no disclosure).
-        return new KycAuthException(ERR_SUBJECT_DENIED);
+        return ERR_SUBJECT_DENIED;
     }
+  }
+
+  /**
+   * Maps a {@link RelayReleaseException} raised during KYC exchange to a {@link KycExchangeException}
+   * using the SAME outcome → code mapping as {@link #mapReleaseException} for {@code doKycAuth}, so the
+   * collapsed denial and configuration faults surface identically across flows.
+   */
+  private KycExchangeException mapReleaseExceptionForExchange(
+      RelayReleaseException e, String transactionId, String clientId) {
+    RelayReleaseError error = e.getError();
+    log.warn("doKycExchange Relay release failed: {} (clientId={}, txn={})", error, clientId,
+        transactionId);
+    return new KycExchangeException(releaseErrorCode(error));
   }
 
   /**
@@ -390,21 +431,137 @@ public class RelayAuthenticationService implements Authenticator {
   }
 
   // ---------------------------------------------------------------------------
-  // Stubbed for M7.
+  // doKycExchange / doVerifiedKycExchange (M7)
   // ---------------------------------------------------------------------------
 
+  /**
+   * Exchanges a verified KYC token for the consented, profile-filtered UserInfo, packaged as a signed
+   * (RS256 JWS) KYC payload eSignet accepts.
+   *
+   * <p><b>Flow:</b> validate input → verify the KYC token (no Relay call if the token is bad) →
+   * reduce the eSignet-accepted claims to {@code intersection(accepted, profile)} (protocol-derived
+   * {@code sub}/{@code $psut} are populated locally, never requested) → call Relay attribute release
+   * with that consented list → map the released claims into the eSignet UserInfo with {@code sub}
+   * derived from the PSUT → sign as JWS via {@link UserInfoSigner}. A JWE response request fails
+   * closed ({@link UserInfoSigner#ERR_JWE_UNSUPPORTED}) and emits no token, because the RP encryption
+   * key is not available to the plugin.
+   *
+   * <p><b>Privacy:</b> logs carry only safe fields (transaction id, client id); never the individual
+   * id, KYC token, PSUT, released attribute values, or the Relay body.
+   */
   @Override
   public KycExchangeResult doKycExchange(
       String relyingPartyId, String clientId, KycExchangeDto kycExchangeDto)
       throws KycExchangeException {
-    throw new KycExchangeException(NOT_IMPLEMENTED);
+    return exchange(relyingPartyId, clientId, kycExchangeDto);
   }
 
+  /**
+   * Verified-KYC exchange. {@link VerifiedKycExchangeDto} extends {@link KycExchangeDto}, so this runs
+   * the IDENTICAL flow as {@link #doKycExchange} and returns the SAME signed claim values.
+   *
+   * <p><b>Why no assurance metadata is synthesized:</b> Relay V1's attribute-release endpoint does not
+   * return verified-claims assurance metadata (no {@code verification}/{@code verified_claims}
+   * provenance). Per spec we MUST NOT fabricate assurance evidence, so this variant currently equals
+   * the standard exchange output rather than emitting fake {@code verification}/{@code verified_claims}
+   * blocks. This would be unblocked once Relay returns verified-claim metadata, at which point this
+   * method would package that provenance into the eSignet verified-claims structure.
+   */
   @Override
   public KycExchangeResult doVerifiedKycExchange(
       String relyingPartyId, String clientId, VerifiedKycExchangeDto kycExchangeDto)
       throws KycExchangeException {
-    throw new KycExchangeException(NOT_IMPLEMENTED);
+    // Relay V1 returns no verified-claims metadata; do NOT fabricate assurance evidence (see Javadoc).
+    return exchange(relyingPartyId, clientId, kycExchangeDto);
+  }
+
+  /**
+   * Shared KYC-exchange implementation for {@link #doKycExchange} and {@link #doVerifiedKycExchange}.
+   * Implements the spec's "Suggested exchange flow": verify token → consented + profile-filtered
+   * claims → Relay → map → sign.
+   */
+  private KycExchangeResult exchange(
+      String relyingPartyId, String clientId, KycExchangeDto dto) throws KycExchangeException {
+
+    // 1. Validate input. Fail closed on anything missing/blank.
+    if (isBlank(relyingPartyId) || isBlank(clientId) || dto == null) {
+      throw new KycExchangeException(ERR_INVALID_REQUEST);
+    }
+    String transactionId = dto.getTransactionId();
+    String kycToken = dto.getKycToken();
+    if (isBlank(transactionId) || isBlank(kycToken)) {
+      throw new KycExchangeException(ERR_INVALID_REQUEST);
+    }
+
+    log.info("doKycExchange start (clientId={}, txn={})", clientId, transactionId);
+
+    try {
+      // 2. Verify the KYC token BEFORE any Relay call. A bad token must never reach Relay.
+      KycTokenClaims claims;
+      try {
+        claims =
+            kycTokenService.verify(
+                kycToken, relyingPartyId, clientId, transactionId, dto.getIndividualId());
+      } catch (KycTokenException e) {
+        log.warn("doKycExchange KYC token verification failed: {} (clientId={}, txn={})",
+            e.getKind(), clientId, transactionId);
+        if (e.getKind() == KycTokenException.Kind.TOKEN_EXPIRED) {
+          throw new KycExchangeException(ERR_TOKEN_EXPIRED);
+        }
+        throw new KycExchangeException(ERR_TOKEN_INVALID);
+      }
+
+      // 3. Subject identity comes from the verified token, never from the request.
+      String subjectValue = claims.getSub();
+      String subjectIdType = claims.getSid();
+
+      // 4. Reduce accepted claims to the consented, profile-filtered Relay source list. sub/$psut are
+      //    protocol-derived and populated locally — never requested from Relay.
+      List<String> acceptedClaims =
+          dto.getAcceptedClaims() == null ? List.of() : dto.getAcceptedClaims();
+      List<String> relayClaims = claimMapper.relayClaimsFor(acceptedClaims);
+
+      // 5. Call Relay attribute release with that consented list (the client omits the claims field
+      //    when the list is empty).
+      RelayReleaseResult relayResult;
+      try {
+        relayResult = relayClient.release(subjectValue, relayClaims);
+      } catch (RelayReleaseException e) {
+        throw mapReleaseExceptionForExchange(e, transactionId, clientId);
+      }
+
+      // 6. PSUT — the protocol subject the relying party sees.
+      String psut =
+          kycTokenService.derivePsut(relyingPartyId, clientId, subjectIdType, subjectValue);
+
+      // 7. Map Relay's released claims into the eSignet UserInfo, sub derived from the PSUT.
+      Map<String, Object> userInfo =
+          claimMapper.toUserInfo(relayResult.getClaims(), psut, acceptedClaims);
+
+      // 8. Package as signed JWS (fail closed on a JWE request; never return unencrypted data).
+      String serialized;
+      try {
+        serialized = userInfoSigner.pack(userInfo, dto.getUserInfoResponseType());
+      } catch (UserInfoPackagingException e) {
+        log.warn("doKycExchange packaging failed: {} (clientId={}, txn={})", e.getCode(), clientId,
+            transactionId);
+        if (UserInfoSigner.ERR_JWE_UNSUPPORTED.equals(e.getCode())) {
+          // Fail closed: emit no token for a JWE request we cannot satisfy.
+          throw new KycExchangeException(UserInfoSigner.ERR_JWE_UNSUPPORTED);
+        }
+        throw new KycExchangeException(ERR_KYC_SIGNING_FAILED);
+      }
+
+      log.info("doKycExchange success (clientId={}, txn={})", clientId, transactionId);
+      return new KycExchangeResult(serialized);
+    } catch (KycExchangeException e) {
+      // Already a stable, mapped exchange error — propagate as-is.
+      throw e;
+    } catch (RuntimeException e) {
+      // Unexpected runtime failure — fail closed without leaking details.
+      log.warn("doKycExchange failed unexpectedly (clientId={}, txn={})", clientId, transactionId);
+      throw new KycExchangeException(ERR_KYC_EXCHANGE_FAILED);
+    }
   }
 
   // --- helpers ---
