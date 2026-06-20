@@ -122,8 +122,9 @@ custom OIDC flow outside the Authenticator interface.
   the `provided` dependency before M6/M7.
 - RP encryption-key sourcing for JWE — document the mechanism; fail closed if
   unavailable.
-- Collapsed `release.subject_denied` HTTP status is unpinned on the Relay side —
-  track the stub to whatever Relay pins.
+- Collapsed `release.subject_denied` HTTP status — **RESOLVED (403)**. Confirmed
+  against registry-relay PR #162 (`src/api/attribute_release.rs`); the stub and
+  contract doc are pinned to 403. The plugin still branches on `code`, not status.
 - KYC-token single-use store deferred (replay within TTL) — documented hardening.
 
 ## Working agreement

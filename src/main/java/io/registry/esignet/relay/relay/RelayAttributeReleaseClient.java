@@ -156,7 +156,10 @@ public class RelayAttributeReleaseClient {
     ObjectNode subject = root.putObject("subject");
     subject.put("id_type", properties.getRelay().getSubject().getIdType());
     subject.put("value", subjectValue);
-    if (claims != null) {
+    // Relay's request is strict (serde deny_unknown_fields) and an explicit empty `claims` array is a
+    // 400. When the caller passes null/empty, OMIT the field entirely so Relay applies the profile's
+    // default claim set. Only a non-empty list is serialized.
+    if (claims != null && !claims.isEmpty()) {
       var array = root.putArray("claims");
       for (String claim : claims) {
         array.add(claim);
@@ -175,10 +178,13 @@ public class RelayAttributeReleaseClient {
       JsonNode root = objectMapper.readTree(body);
       String profileId = textOrNull(root, "profile_id");
       String profileVersion = textOrNull(root, "profile_version");
-      String purpose = textOrNull(root, "purpose");
       Map<String, Object> claims = toScalarMap(root.get("claims"));
-      Map<String, Object> source = toScalarMap(root.get("source"));
-      return new RelayReleaseResult(profileId, profileVersion, purpose, claims, source);
+      // `source` may be gated off by the profile's include_source_metadata config; treat an absent
+      // object as null (optional) rather than failing or fabricating an empty block.
+      JsonNode sourceNode = root.get("source");
+      Map<String, Object> source =
+          sourceNode == null || !sourceNode.isObject() ? null : toScalarMap(sourceNode);
+      return new RelayReleaseResult(profileId, profileVersion, claims, source);
     } catch (IOException e) {
       log.warn("Relay success body could not be parsed; failing closed");
       throw new RelayReleaseException(RelayReleaseError.UNKNOWN, null, e);

@@ -2,6 +2,7 @@ package io.registry.esignet.relay.relay;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.registry.esignet.relay.RelayAuthenticatorProperties;
@@ -91,6 +92,55 @@ class RelayAttributeReleaseClientTest {
     assertTrue(body.contains("\"claims\":[\"individual_id\",\"name\"]"), "exact claim list in body");
     // The subject value must never appear in the URL/path.
     assertFalse(stub.lastRequest().path.contains("NID-2001"), "subject must not be in the URL");
+  }
+
+  @Test
+  void successBodyHasNoPurposeAndIsNotRequired() throws Exception {
+    // The real Relay success body carries no top-level `purpose`. Parsing must not require it.
+    stub.setNextResponse(StubResponse.json(200, RelayStubServer.SUCCESS_BODY));
+
+    RelayReleaseResult result = client.release("NID-2001", List.of("individual_id"));
+
+    assertEquals("esignet-civil-userinfo", result.getProfileId());
+    assertFalse(
+        RelayStubServer.SUCCESS_BODY.contains("\"purpose\""),
+        "stub success body must not include a top-level purpose field");
+  }
+
+  @Test
+  void omitsClaimsFieldWhenNull() throws Exception {
+    // null claims => omit the field entirely so Relay applies the profile default set.
+    stub.setNextResponse(StubResponse.json(200, RelayStubServer.SUCCESS_BODY));
+
+    client.release("NID-2001", null);
+
+    String body = stub.lastRequest().body;
+    assertFalse(body.contains("\"claims\""), "claims field must be omitted for null claims");
+  }
+
+  @Test
+  void omitsClaimsFieldWhenEmpty() throws Exception {
+    // An explicit empty `[]` is a 400 on Relay (deny_unknown_fields/strict). Empty => omit entirely.
+    stub.setNextResponse(StubResponse.json(200, RelayStubServer.SUCCESS_BODY));
+
+    client.release("NID-2001", List.of());
+
+    String body = stub.lastRequest().body;
+    assertFalse(body.contains("\"claims\""), "claims field must be omitted for an empty claim list");
+    assertFalse(body.contains("[]"), "must never serialize an explicit empty claims array");
+  }
+
+  @Test
+  void toleratesAbsentSourceBlock() throws Exception {
+    // `source` may be gated off by the profile config; parsing must not NPE and source is optional.
+    stub.setNextResponse(StubResponse.json(200, RelayStubServer.SUCCESS_BODY_NO_SOURCE));
+
+    RelayReleaseResult result = client.release("NID-2001", List.of("individual_id"));
+
+    assertEquals("esignet-civil-userinfo", result.getProfileId());
+    assertEquals("NID-2001", result.getClaims().get("individual_id"));
+    assertFalse(result.hasSource(), "source must be reported absent when Relay omits it");
+    assertNull(result.getSource(), "absent source must be exposed as null, not an empty map");
   }
 
   // --- Distinguishable error codes: each maps to its own internal outcome ---

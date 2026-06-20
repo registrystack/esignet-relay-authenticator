@@ -19,19 +19,18 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * scenario (not-found, ambiguous, release-denied, required-claim-missing), so tests can prove the
  * plugin cannot and does not branch on the hidden sub-reason.
  */
-final class RelayStubServer implements AutoCloseable {
+public final class RelayStubServer implements AutoCloseable {
 
   /** The collapsed denial body, returned identically for all four internal scenarios. */
-  static final String SUBJECT_DENIED_BODY =
+  public static final String SUBJECT_DENIED_BODY =
       "{\"type\":\"https://registry-relay.dev/problems/release/subject_denied\","
           + "\"title\":\"Subject release denied\",\"status\":403,"
           + "\"code\":\"release.subject_denied\"}";
 
-  static final String SUCCESS_BODY =
+  public static final String SUCCESS_BODY =
       "{"
           + "\"profile_id\":\"esignet-civil-userinfo\","
           + "\"profile_version\":\"v1\","
-          + "\"purpose\":\"https://demo.example.gov/purpose/esignet-identity-verification\","
           + "\"claims\":{"
           + "\"individual_id\":\"NID-2001\","
           + "\"name\":\"Maria Santos\","
@@ -48,24 +47,37 @@ final class RelayStubServer implements AutoCloseable {
           + "}"
           + "}";
 
+  /**
+   * Success body with the {@code source} block gated off (profile not configured to include source
+   * metadata). Proves the client tolerates an absent {@code source} without NPE.
+   */
+  public static final String SUCCESS_BODY_NO_SOURCE =
+      "{"
+          + "\"profile_id\":\"esignet-civil-userinfo\","
+          + "\"profile_version\":\"v1\","
+          + "\"claims\":{"
+          + "\"individual_id\":\"NID-2001\""
+          + "}"
+          + "}";
+
   /** A response the stub should send. */
-  record StubResponse(int status, String contentType, String body, long delayMillis) {
-    static StubResponse json(int status, String body) {
+  public record StubResponse(int status, String contentType, String body, long delayMillis) {
+    public static StubResponse json(int status, String body) {
       return new StubResponse(status, "application/json", body, 0);
     }
 
-    static StubResponse problem(int status, String body) {
+    public static StubResponse problem(int status, String body) {
       return new StubResponse(status, "application/problem+json", body, 0);
     }
   }
 
   /** Captures the headers and body the plugin sent, for header/contract assertions. */
-  static final class CapturedRequest {
-    final String method;
-    final String path;
+  public static final class CapturedRequest {
+    public final String method;
+    public final String path;
     // Case-insensitive: the JDK HttpServer normalizes header-name capitalization on receipt.
-    final Map<String, String> headers = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
-    final String body;
+    public final Map<String, String> headers = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+    public final String body;
 
     CapturedRequest(String method, String path, String body) {
       this.method = method;
@@ -79,26 +91,26 @@ final class RelayStubServer implements AutoCloseable {
   private volatile StubResponse nextResponse =
       StubResponse.json(200, SUCCESS_BODY);
 
-  RelayStubServer() throws IOException {
+  public RelayStubServer() throws IOException {
     this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     this.server.createContext("/", this::handle);
     this.server.start();
   }
 
   /** Sets the response the next request will receive. */
-  void setNextResponse(StubResponse response) {
+  public void setNextResponse(StubResponse response) {
     this.nextResponse = response;
   }
 
-  String baseUrl() {
+  public String baseUrl() {
     return "http://127.0.0.1:" + server.getAddress().getPort();
   }
 
-  List<CapturedRequest> requests() {
+  public List<CapturedRequest> requests() {
     return requests;
   }
 
-  CapturedRequest lastRequest() {
+  public CapturedRequest lastRequest() {
     return requests.get(requests.size() - 1);
   }
 

@@ -16,8 +16,10 @@ test stub. Keep it aligned cell-for-cell with the Relay brief, and record the
 Relay spec revision you aligned against here so drift is detectable:
 
 ```text
-Aligned-to: registry-relay esignet-identity-attribute-release-spec.md
-Aligned-on: 2026-06-20 (update commit/date when re-syncing)
+Aligned-to: registry-relay PR #162 handler src/api/attribute_release.rs
+Aligned-on: 2026-06-20 (re-synced: no top-level purpose in the success body;
+            strict request with claims omitted when empty; optional source block;
+            collapsed release.subject_denied confirmed 403)
 ```
 
 If the Relay side later publishes an OpenAPI fragment for this route, prefer
@@ -64,9 +66,14 @@ does not expose private source table ids/paths or policy internals.
 }
 ```
 
+- The request is **strict** (serde `deny_unknown_fields`): the body must be
+  exactly `{"subject":{"id_type","value"},"claims"?}`. The client sends only
+  those fields. (Aligned to registry-relay PR #162.)
 - `subject.id_type` must be an accepted subject id type for the profile.
-- `claims` is optional. If omitted, Relay returns the profile's default claim
-  set.
+- `claims` is optional. If **omitted**, Relay returns the profile's default
+  claim set. An **explicit empty array `[]` is a 400.** Therefore, when the
+  caller passes a null or empty claim list, the client must **omit the `claims`
+  field entirely** rather than serialize `[]`.
 - **Relay denies the entire request (V1) if any requested claim is not in the
   profile.** It does not silently omit unknown claims. The plugin must send only
   `intersection(consented claims, profile/config-declared claims)`. Optional
@@ -74,13 +81,14 @@ does not expose private source table ids/paths or policy internals.
 
 ## Success response
 
-`200 OK`, `application/json`:
+`200 OK`, `application/json`. The body is exactly
+`{"profile_id","profile_version","claims","source"?}` — there is **no**
+top-level `purpose` field, and `source` is optional (see below):
 
 ```json
 {
   "profile_id": "esignet-civil-userinfo",
   "profile_version": "v1",
-  "purpose": "https://demo.example.gov/purpose/esignet-identity-verification",
   "claims": {
     "individual_id": "NID-2001",
     "name": "Maria Santos",
@@ -98,6 +106,11 @@ does not expose private source table ids/paths or policy internals.
 }
 ```
 
+- There is **no** top-level `purpose` field in the success body. (Aligned to
+  registry-relay PR #162 handler `src/api/attribute_release.rs`.)
+- The `source` block is **optional**: Relay gates it on the profile's
+  `include_source_metadata` config and omits it entirely when disabled. Clients
+  must tolerate an absent `source` (no error, no fabricated empty block).
 - The response never includes source fields not declared in the profile.
 - The response does not echo the raw subject value except through an explicitly
   released claim. (`individual_id == national_id` here is an intentional
@@ -147,14 +160,13 @@ denial. The finer distinctions exist only in Relay's audit log and are **never
 visible to the plugin**. The plugin must not attempt to distinguish them and
 must reveal no sub-reason to eSignet or in logs.
 
-| Relay public `code` | Collapses (internal, audit-only) | Plugin treatment |
-| --- | --- | --- |
-| `release.subject_denied` | subject not found; subject ambiguous (>1); release condition denied (e.g. deceased/inactive); required claim unavailable | one generic authentication failure |
+| Relay public `code` | HTTP | Collapses (internal, audit-only) | Plugin treatment |
+| --- | --- | --- | --- |
+| `release.subject_denied` | 403 | subject not found; subject ambiguous (>1); release condition denied (e.g. deceased/inactive); required claim unavailable | one generic authentication failure |
 
-> Open item to pin with the Relay side: the Relay outcome table does not yet
-> specify an HTTP status for the collapsed `release.subject_denied` (every other
-> row has one). Record the agreed status here once pinned. Until then, treat any
-> `code == release.subject_denied` as the collapsed denial regardless of status.
+> The collapsed `release.subject_denied` status is **confirmed 403** against
+> registry-relay PR #162 (`src/api/attribute_release.rs`). The plugin still
+> branches on `code`, never on status — but the status is no longer unpinned.
 
 ### Example error bodies
 

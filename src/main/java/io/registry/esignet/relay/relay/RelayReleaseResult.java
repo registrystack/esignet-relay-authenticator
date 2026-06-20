@@ -8,41 +8,41 @@ import java.util.Map;
  * Typed result of a successful (200) attribute-release call.
  *
  * <p>Exposes the released {@code claims} as a {@code Map<String,Object>} preserving the scalar JSON
- * types Relay returned (strings, numbers, booleans, etc.), plus the profile metadata and the {@code
- * source} block. Callers must not log the claim values.
+ * types Relay returned (strings, numbers, booleans, etc.), plus the profile metadata and the
+ * optional {@code source} block. Callers must not log the claim values.
+ *
+ * <p>The Relay success body is exactly {@code {"profile_id","profile_version","claims",
+ * "source"?}} — there is <b>no</b> top-level {@code purpose} field, and {@code source} may be gated
+ * off by the profile's {@code include_source_metadata} config, in which case {@link #getSource()}
+ * returns {@code null} (see {@link #hasSource()}).
  */
 public final class RelayReleaseResult {
 
   private final String profileId;
   private final String profileVersion;
-  private final String purpose;
   private final Map<String, Object> claims;
   private final Map<String, Object> source;
 
   /**
    * @param profileId the profile id echoed by Relay
    * @param profileVersion the profile version echoed by Relay
-   * @param purpose the purpose echoed by Relay
    * @param claims released claims, preserving scalar JSON types; may be empty, never {@code null}
-   * @param source the {@code source} block; may be empty, never {@code null}
+   * @param source the optional {@code source} block; {@code null} when Relay omitted it (profile not
+   *     configured to include source metadata)
    */
   public RelayReleaseResult(
       String profileId,
       String profileVersion,
-      String purpose,
       Map<String, Object> claims,
       Map<String, Object> source) {
     this.profileId = profileId;
     this.profileVersion = profileVersion;
-    this.purpose = purpose;
     this.claims =
         claims == null
             ? Collections.emptyMap()
             : Collections.unmodifiableMap(new LinkedHashMap<>(claims));
     this.source =
-        source == null
-            ? Collections.emptyMap()
-            : Collections.unmodifiableMap(new LinkedHashMap<>(source));
+        source == null ? null : Collections.unmodifiableMap(new LinkedHashMap<>(source));
   }
 
   public String getProfileId() {
@@ -53,10 +53,6 @@ public final class RelayReleaseResult {
     return profileVersion;
   }
 
-  public String getPurpose() {
-    return purpose;
-  }
-
   /**
    * @return an immutable view of the released claims, preserving scalar JSON types
    */
@@ -65,10 +61,19 @@ public final class RelayReleaseResult {
   }
 
   /**
-   * @return an immutable view of the {@code source} block
+   * @return an immutable view of the optional {@code source} block, or {@code null} when Relay did
+   *     not include source metadata for this profile
    */
   public Map<String, Object> getSource() {
     return source;
+  }
+
+  /**
+   * @return {@code true} when Relay included a {@code source} block, {@code false} when it was gated
+   *     off by the profile
+   */
+  public boolean hasSource() {
+    return source != null;
   }
 
   /**
