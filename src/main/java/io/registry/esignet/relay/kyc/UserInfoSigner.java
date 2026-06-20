@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.security.Signature;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
@@ -67,15 +68,17 @@ public class UserInfoSigner {
    * may be lazily loaded), but stable for a given key since kid/alg are deterministic.
    */
   private String encodedHeader() {
-    String header =
-        "{\"alg\":\""
-            + signingKeyService.getAlgorithm()
-            + "\",\"kid\":\""
-            + signingKeyService.getKid()
-            + "\",\"typ\":\""
-            + TYP
-            + "\"}";
-    return base64Url(header.getBytes(StandardCharsets.UTF_8));
+    // Build via Jackson so the algorithm/kid values are correctly JSON-escaped rather than spliced
+    // into a hand-written string. LinkedHashMap keeps the stable alg/kid/typ ordering.
+    Map<String, String> header = new LinkedHashMap<>();
+    header.put("alg", signingKeyService.getAlgorithm());
+    header.put("kid", signingKeyService.getKid());
+    header.put("typ", TYP);
+    try {
+      return base64Url(objectMapper.writeValueAsBytes(header));
+    } catch (Exception e) {
+      throw new IllegalStateException("Failed to serialize JWS header", e);
+    }
   }
 
   /**

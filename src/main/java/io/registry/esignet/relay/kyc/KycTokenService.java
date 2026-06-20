@@ -47,9 +47,10 @@ import org.slf4j.LoggerFactory;
  * Signature: HMAC-SHA256(kycTokenSecret, base64url(header) + "." + base64url(payload))
  * </pre>
  *
- * <p>PSUT derivation:
+ * <p>PSUT derivation (each component is base64url-encoded before joining so the {@code |} delimiter
+ * can never collide across components):
  * <pre>
- * base64url(HMAC-SHA256(psutSecret, relyingPartyId + "|" + clientId + "|" + subjectIdType + "|" + subjectValue))
+ * base64url(HMAC-SHA256(psutSecret, b64(relyingPartyId) + "|" + b64(clientId) + "|" + b64(subjectIdType) + "|" + b64(subjectValue)))
  * </pre>
  *
  * <p><b>Security:</b>
@@ -300,11 +301,17 @@ public class KycTokenService {
   /**
    * Derives a deterministic, partner-specific user token (PSUT).
    *
-   * <p>Formula: {@code base64url(HMAC-SHA256(psutSecret, rp + "|" + clientId + "|" + sidType + "|" + subjectValue))}
+   * <p>Formula: {@code base64url(HMAC-SHA256(psutSecret, b64(rp) + "|" + b64(clientId) + "|" + b64(sidType) + "|" + b64(subjectValue)))}
    *
    * <p>The PSUT is stable for the same inputs, so a relying party always sees the same subject
    * identifier for the same individual. It differs across RP/client/subject combinations, preventing
    * cross-RP linkage from the PSUT value alone.
+   *
+   * <p>Each component is base64url-encoded before being joined with {@code |}. Because the base64url
+   * alphabet excludes {@code |}, distinct {@code (rp, clientId, sidType, subjectValue)} tuples can
+   * never produce the same input string — a {@code clientId} or {@code rp} that itself contained a
+   * raw {@code |} could otherwise collide two different parties onto the same PSUT and break the
+   * pairwise-pseudonym guarantee.
    *
    * @param relyingPartyId the relying party ID
    * @param clientId the OIDC client ID
@@ -314,8 +321,21 @@ public class KycTokenService {
    */
   public String derivePsut(
       String relyingPartyId, String clientId, String subjectIdType, String subjectValue) {
-    String input = relyingPartyId + "|" + clientId + "|" + subjectIdType + "|" + subjectValue;
+    String input =
+        b64Component(relyingPartyId)
+            + "|"
+            + b64Component(clientId)
+            + "|"
+            + b64Component(subjectIdType)
+            + "|"
+            + b64Component(subjectValue);
     return hmacSign(psutSecret(), input);
+  }
+
+  /** Base64url-encodes one PSUT component (UTF-8, no padding); null is treated as empty. */
+  private static String b64Component(String value) {
+    byte[] bytes = (value == null ? "" : value).getBytes(StandardCharsets.UTF_8);
+    return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
   }
 
   // --- private helpers ---

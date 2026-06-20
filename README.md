@@ -168,14 +168,16 @@ operational errors, not per-user auth failures.
 ## Secrets and environment variables
 
 All secrets come from the environment or a secret manager — **never** committed
-and never logged. The validated config redacts them in `toString`.
+and never logged. The validated config redacts them in `toString`. Both HMAC
+secrets must be **≥ 32 characters** (high-entropy random) or startup validation
+fails; the signing key must be **RSA ≥ 2048 bits**.
 
 | Property | Env var (example) | Purpose |
 |---|---|---|
 | `registry.relay.auth.bearer-token` | `REGISTRY_RELAY_TOKEN` | Bearer credential for Relay |
-| `registry.esignet.kyc-token.hmac-secret` | `REGISTRY_ESIGNET_KYC_TOKEN_SECRET` | HS256 key for the internal KYC token |
-| `registry.esignet.psut.hmac-secret` | `REGISTRY_ESIGNET_PSUT_SECRET` | HMAC key for PSUT derivation (must differ from the KYC token secret) |
-| `registry.esignet.kyc.signing.keystore-path` | `REGISTRY_ESIGNET_KYC_KEYSTORE_PATH` | Path to the RSA signing keystore (PKCS12/JKS) |
+| `registry.esignet.kyc-token.hmac-secret` | `REGISTRY_ESIGNET_KYC_TOKEN_SECRET` | HS256 key for the internal KYC token (≥ 32 chars) |
+| `registry.esignet.psut.hmac-secret` | `REGISTRY_ESIGNET_PSUT_SECRET` | HMAC key for PSUT derivation (must differ from the KYC token secret; ≥ 32 chars) |
+| `registry.esignet.kyc.signing.keystore-path` | `REGISTRY_ESIGNET_KYC_KEYSTORE_PATH` | Path to the RSA signing keystore (PKCS12/JKS, RSA ≥ 2048-bit) |
 | `registry.esignet.kyc.signing.keystore-password` | `REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD` | Keystore password |
 | `registry.esignet.kyc.signing.key-alias` | `REGISTRY_ESIGNET_KYC_KEY_ALIAS` | Signing key alias |
 | `registry.esignet.kyc.signing.key-password` | `REGISTRY_ESIGNET_KYC_KEY_PASSWORD` | Signing key password |

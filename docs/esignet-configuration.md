@@ -40,7 +40,7 @@ manager — never hard-coded.
 
 | Property | Default | Notes |
 |---|---|---|
-| `registry.relay.base-url` | *(required)* | Absolute `http(s)` URL of the Relay service. TLS assumed for non-local URLs. |
+| `registry.relay.base-url` | *(required)* | Absolute `http(s)` URL of the Relay service. Use `https` in production — a plaintext `http` URL to a non-loopback host logs a startup warning because the Bearer token and subject identifiers would travel unencrypted. |
 | `registry.relay.attribute-release.profile-id` | *(required)* | The Relay attribute-release profile id. |
 | `registry.relay.attribute-release.profile-version` | *(required)* | The profile version. |
 | `registry.relay.attribute-release.path-template` | `/v1/attribute-releases/{profile_id}/versions/{version}/resolve` | Must contain `{profile_id}` and `{version}`. |
@@ -76,9 +76,9 @@ manager — never hard-coded.
 
 | Property | Default | Notes |
 |---|---|---|
-| `registry.esignet.kyc-token.hmac-secret` | `${REGISTRY_ESIGNET_KYC_TOKEN_SECRET}` | HS256 key for the short-lived internal KYC token. |
+| `registry.esignet.kyc-token.hmac-secret` | `${REGISTRY_ESIGNET_KYC_TOKEN_SECRET}` | HS256 key for the short-lived internal KYC token. **Must be ≥ 32 characters** (validation fails otherwise); use a high-entropy random value. |
 | `registry.esignet.kyc-token.ttl-seconds` | `300` | KYC token TTL. Keep short (replay mitigation). |
-| `registry.esignet.psut.hmac-secret` | `${REGISTRY_ESIGNET_PSUT_SECRET}` | HMAC key for PSUT derivation. **Must differ** from the KYC token secret. |
+| `registry.esignet.psut.hmac-secret` | `${REGISTRY_ESIGNET_PSUT_SECRET}` | HMAC key for PSUT derivation. **Must differ** from the KYC token secret and be **≥ 32 characters**. |
 
 ### 2.5 KYC/UserInfo signing (keystore)
 
@@ -121,7 +121,8 @@ registry.esignet.claim-map[address.region]=address.region
 ## 3. Generating a signing keystore
 
 The plugin signs with an RSA key from a standard keystore (no committed keys).
-Generate one for a deployment with `keytool`:
+The key must be **at least 2048 bits** — a smaller key is rejected when the
+signing material is loaded. Generate one for a deployment with `keytool`:
 
 ```bash
 keytool -genkeypair \

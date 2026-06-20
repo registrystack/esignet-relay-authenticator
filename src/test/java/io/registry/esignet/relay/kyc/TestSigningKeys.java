@@ -41,9 +41,20 @@ public final class TestSigningKeys {
    * @return the generated bundle
    */
   public static Bundle generate() {
+    return generate(2048);
+  }
+
+  /**
+   * Generates a fresh RSA keypair of the given size, a 1-year self-signed certificate, and a PKCS12
+   * keystore containing them under {@link #ALIAS}. Used to exercise the minimum-key-size guard.
+   *
+   * @param keySize the RSA modulus size in bits
+   * @return the generated bundle
+   */
+  public static Bundle generate(int keySize) {
     try {
       KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
-      generator.initialize(2048);
+      generator.initialize(keySize);
       KeyPair keyPair = generator.generateKeyPair();
       X509Certificate certificate = selfSign(keyPair);
 

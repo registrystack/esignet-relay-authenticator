@@ -293,6 +293,17 @@ class KycTokenServiceTest {
   }
 
   @Test
+  void psutResistsDelimiterCollisionAcrossComponents() {
+    // Under a naive "|"-join these two tuples would both serialize to "a|b|c|<subject>" and collide.
+    // Component-wise base64url encoding must keep them distinct so the pairwise pseudonym holds.
+    String psut1 = service.derivePsut("a|b", "c", SID_TYPE, SUBJECT);
+    String psut2 = service.derivePsut("a", "b|c", SID_TYPE, SUBJECT);
+
+    assertNotEquals(
+        psut1, psut2, "PSUT must not collide when a '|' shifts across the rp/clientId boundary");
+  }
+
+  @Test
   void psutIsBase64UrlEncoded() {
     String psut = service.derivePsut(RP, CLIENT, SID_TYPE, SUBJECT);
 

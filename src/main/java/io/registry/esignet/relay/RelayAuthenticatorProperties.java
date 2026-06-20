@@ -9,6 +9,8 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -31,6 +33,15 @@ public class RelayAuthenticatorProperties {
   /** Masking marker used wherever a configured secret would otherwise be printed. */
   public static final String REDACTED = "***REDACTED***";
 
+  /**
+   * Minimum length (characters) required for the HS256 KYC-token and PSUT HMAC secrets. These secrets
+   * key the token signature and the PSUT derivation directly, so a short/low-entropy value would be
+   * brute-forceable; 32 characters is a conservative floor for a 256-bit MAC.
+   */
+  static final int MIN_HMAC_SECRET_LENGTH = 32;
+
+  private static final Logger log = LoggerFactory.getLogger(RelayAuthenticatorProperties.class);
+
   private Relay relay = new Relay();
   private Esignet esignet = new Esignet();
 
@@ -51,6 +62,8 @@ public class RelayAuthenticatorProperties {
       problems.add("registry.relay.base-url must be set");
     } else if (!isAbsoluteHttpUrl(relay.baseUrl)) {
       problems.add("registry.relay.base-url must be a valid absolute http(s) URL");
+    } else {
+      warnIfPlaintextNonLoopback(relay.baseUrl);
     }
 
     Relay.AttributeRelease ar = relay.attributeRelease;
@@ -91,14 +104,26 @@ public class RelayAuthenticatorProperties {
     }
 
     // --- Security-sensitive: internal HMAC secrets ---
+    // These key the HS256 KYC token and the PSUT derivation directly, so a short/low-entropy value is
+    // brute-forceable; require a non-trivial minimum length in addition to non-blank.
     if (isBlank(esignet.kycToken.hmacSecret)) {
       problems.add("registry.esignet.kyc-token.hmac-secret must be set");
+    } else if (esignet.kycToken.hmacSecret.length() < MIN_HMAC_SECRET_LENGTH) {
+      problems.add(
+          "registry.esignet.kyc-token.hmac-secret must be at least "
+              + MIN_HMAC_SECRET_LENGTH
+              + " characters");
     }
     if (esignet.kycToken.ttlSeconds <= 0) {
       problems.add("registry.esignet.kyc-token.ttl-seconds must be a positive number of seconds");
     }
     if (isBlank(esignet.psut.hmacSecret)) {
       problems.add("registry.esignet.psut.hmac-secret must be set");
+    } else if (esignet.psut.hmacSecret.length() < MIN_HMAC_SECRET_LENGTH) {
+      problems.add(
+          "registry.esignet.psut.hmac-secret must be at least "
+              + MIN_HMAC_SECRET_LENGTH
+              + " characters");
     }
 
     // --- Security-sensitive: signing keystore, required only for self-contained-jws ---
@@ -146,6 +171,34 @@ public class RelayAuthenticatorProperties {
     } catch (URISyntaxException e) {
       return false;
     }
+  }
+
+  /**
+   * Warns when the Relay base URL is plaintext {@code http} to a non-loopback host: the Bearer token
+   * and subject identifiers would travel unencrypted. Loopback ({@code localhost}/{@code 127.0.0.0/8}/
+   * {@code ::1}) is allowed silently for local development. Only the host is logged, never credentials.
+   */
+  private static void warnIfPlaintextNonLoopback(String baseUrl) {
+    try {
+      URI uri = new URI(baseUrl.trim());
+      if ("http".equalsIgnoreCase(uri.getScheme()) && !isLoopbackHost(uri.getHost())) {
+        log.warn(
+            "registry.relay.base-url uses plaintext http to non-loopback host '{}'; the Relay"
+                + " bearer token and subject identifiers will be sent unencrypted. Use https in"
+                + " production.",
+            uri.getHost());
+      }
+    } catch (URISyntaxException e) {
+      // Already validated as an absolute http(s) URL above; nothing to warn about.
+    }
+  }
+
+  private static boolean isLoopbackHost(String host) {
+    if (host == null) {
+      return false;
+    }
+    String h = host.toLowerCase();
+    return h.equals("localhost") || h.equals("::1") || h.equals("[::1]") || h.startsWith("127.");
   }
 
   public Relay getRelay() {

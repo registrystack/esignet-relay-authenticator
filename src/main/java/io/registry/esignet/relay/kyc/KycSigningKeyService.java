@@ -47,6 +47,9 @@ public class KycSigningKeyService {
   public static final String DEFAULT_ALGORITHM =
       RelayAuthenticatorProperties.Esignet.Kyc.Signing.DEFAULT_ALGORITHM;
 
+  /** Minimum accepted RSA signing-key size, in bits. */
+  static final int MIN_RSA_KEY_BITS = 2048;
+
   /** Supplies the loaded signing material on first use, so construction is tolerant. */
   private final Supplier<Material> materialSupplier;
 
@@ -167,7 +170,13 @@ public class KycSigningKeyService {
     if (!(cert.getPublicKey() instanceof RSAPublicKey)) {
       throw new IllegalStateException("Certificate public key must be RSA");
     }
-    String kid = computeKid((RSAPublicKey) cert.getPublicKey());
+    RSAPublicKey rsaPublicKey = (RSAPublicKey) cert.getPublicKey();
+    int keyBits = rsaPublicKey.getModulus().bitLength();
+    if (keyBits < MIN_RSA_KEY_BITS) {
+      throw new IllegalStateException(
+          "Signing RSA key must be at least " + MIN_RSA_KEY_BITS + " bits");
+    }
+    String kid = computeKid(rsaPublicKey);
     log.info("KYC signing key loaded (kid={}, alg={})", kid, alg);
     return new Material((RSAPrivateKey) loadedKey, cert, alg, kid);
   }

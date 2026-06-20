@@ -54,6 +54,36 @@ class RelayAuthenticatorPropertiesTest {
   }
 
   @Test
+  void shortKycTokenHmacSecretRejected() {
+    RelayAuthenticatorProperties props = TestProperties.valid();
+    props.getEsignet().getKycToken().setHmacSecret("too-short");
+
+    RelayAuthenticatorConfigException ex =
+        assertThrows(RelayAuthenticatorConfigException.class, props::validate);
+    assertTrue(
+        ex.getProblems().stream()
+            .anyMatch(
+                p ->
+                    p.contains("registry.esignet.kyc-token.hmac-secret")
+                        && p.contains("at least")),
+        "should reject a non-blank but too-short KYC-token HMAC secret");
+  }
+
+  @Test
+  void shortPsutHmacSecretRejected() {
+    RelayAuthenticatorProperties props = TestProperties.valid();
+    props.getEsignet().getPsut().setHmacSecret("too-short");
+
+    RelayAuthenticatorConfigException ex =
+        assertThrows(RelayAuthenticatorConfigException.class, props::validate);
+    assertTrue(
+        ex.getProblems().stream()
+            .anyMatch(
+                p -> p.contains("registry.esignet.psut.hmac-secret") && p.contains("at least")),
+        "should reject a non-blank but too-short PSUT HMAC secret");
+  }
+
+  @Test
   void invalidBaseUrlRejected() {
     RelayAuthenticatorProperties props = TestProperties.valid();
     props.getRelay().setBaseUrl("not-a-url");
@@ -134,8 +164,11 @@ class RelayAuthenticatorPropertiesTest {
     String rendered = props.toString();
 
     assertFalse(rendered.contains("relay-test-token"), "bearer token must be redacted");
-    assertFalse(rendered.contains("kyc-token-secret-value"), "KYC-token secret must be redacted");
-    assertFalse(rendered.contains("psut-secret-value"), "PSUT secret must be redacted");
+    assertFalse(
+        rendered.contains("kyc-token-hmac-secret-0123456789abcdef"),
+        "KYC-token secret must be redacted");
+    assertFalse(
+        rendered.contains("psut-hmac-secret-0123456789abcdef0123"), "PSUT secret must be redacted");
     assertFalse(rendered.contains("keystore-pass"), "keystore password must be redacted");
     assertFalse(rendered.contains("key-pass"), "key password must be redacted");
     assertFalse(rendered.contains("111111"), "static OTP value must be redacted");

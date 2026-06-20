@@ -80,6 +80,17 @@ class KycSigningKeyServiceTest {
                 bundle.keyStore(), "no-such-alias", TestSigningKeys.PASSWORD, "RS256"));
   }
 
+  @Test
+  void rejectsRsaKeySmallerThanMinimum() {
+    TestSigningKeys.Bundle weak = TestSigningKeys.generate(1024);
+    assertThrows(
+        IllegalStateException.class,
+        () ->
+            new KycSigningKeyService(
+                weak.keyStore(), TestSigningKeys.ALIAS, TestSigningKeys.PASSWORD, "RS256"),
+        "an RSA key below the minimum size must be rejected");
+  }
+
   private static KycSigningKeyService signing(TestSigningKeys.Bundle bundle) {
     KeyStore ks = bundle.keyStore();
     return new KycSigningKeyService(ks, TestSigningKeys.ALIAS, TestSigningKeys.PASSWORD, "RS256");

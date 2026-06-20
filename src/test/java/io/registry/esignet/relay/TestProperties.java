@@ -39,9 +39,10 @@ public final class TestProperties {
     esignet.getAuth().getOtp().setMode("static");
     esignet.getAuth().getOtp().setStaticValue("111111");
     esignet.getAuth().getOtp().setStaticEnabled(false);
-    esignet.getKycToken().setHmacSecret("kyc-token-secret-value");
+    // HMAC secrets must be at least RelayAuthenticatorProperties.MIN_HMAC_SECRET_LENGTH chars.
+    esignet.getKycToken().setHmacSecret("kyc-token-hmac-secret-0123456789abcdef");
     esignet.getKycToken().setTtlSeconds(300);
-    esignet.getPsut().setHmacSecret("psut-secret-value");
+    esignet.getPsut().setHmacSecret("psut-hmac-secret-0123456789abcdef0123");
 
     // Default response mode is self-contained-jws, so signing keystore settings are required.
     esignet.getKyc().setResponseMode("self-contained-jws");
