@@ -111,6 +111,9 @@ top-level `purpose` field, and `source` is optional (see below):
 - The `source` block is **optional**: Relay gates it on the profile's
   `include_source_metadata` config and omits it entirely when disabled. Clients
   must tolerate an absent `source` (no error, no fabricated empty block).
+  (The Relay handler now honors `include_source_metadata` as of registry-relay
+  PR #162, commit `99762e3`; earlier builds emitted `source` unconditionally.
+  The client already ignores `source` contents, so this is transparent.)
 - The response never includes source fields not declared in the profile.
 - The response does not echo the raw subject value except through an explicitly
   released claim. (`individual_id == national_id` here is an intentional
@@ -150,13 +153,18 @@ them alertable.
 | `release.subject_invalid` | 400 | bad id type or malformed subject value | invalid request (also catch before sending) |
 | `release.source_unavailable` | 503 | source read failed | relay-unavailable, fail closed |
 
-> **Backend drift (2026-06-20):** the current Relay handler (`src/api/attribute_release.rs`)
-> emits the generic `filter.not_allowed` / `filter.invalid_value` (400) codes for subject
-> id-type/value validation instead of `release.subject_invalid`, even though
-> `ReleaseError::SubjectInvalid` exists in its taxonomy. The plugin **aliases both filter
-> codes to `subject_invalid`** so a misconfigured subject id-type surfaces as an invalid
-> request, not a generic denial. Raised with the Relay team; remove the alias once the
-> backend emits `release.subject_invalid`.
+> **Backend drift (2026-06-20, resolved upstream):** the Relay handler
+> (`src/api/attribute_release.rs`) historically emitted the generic `filter.not_allowed` /
+> `filter.invalid_value` (400) codes for subject id-type/value validation instead of
+> `release.subject_invalid`, even though `ReleaseError::SubjectInvalid` already existed in its
+> taxonomy. The Relay team has since switched `validate_subject` to return
+> `release.subject_invalid` (registry-relay PR #162, commit `99762e3`; under CI at time of
+> writing). The plugin **aliases both legacy filter codes to `subject_invalid`** in
+> `RelayReleaseError.fromCode`, so a misconfigured subject id-type surfaces as an invalid
+> request — not a generic denial — against both the old and the fixed backend. Keep the alias
+> as a transitional compatibility shim through the #162 rollout; remove it (and the two
+> `filter*IsAliasedToSubjectInvalid` tests) once #162 is merged and deployed everywhere this
+> plugin talks to.
 
 Transport level (no problem document): connect/read timeout or no response →
 treat as relay-unavailable, fail closed.
