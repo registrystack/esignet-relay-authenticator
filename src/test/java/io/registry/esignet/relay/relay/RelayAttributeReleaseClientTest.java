@@ -171,6 +171,19 @@ class RelayAttributeReleaseClientTest {
   }
 
   @Test
+  void filterNotAllowedIsAliasedToSubjectInvalid() {
+    // The backend currently emits filter.not_allowed for a bad/mismatched subject id-type; the
+    // plugin treats it as an invalid request rather than a generic subject denial.
+    assertErrorMapping(400, problem("filter.not_allowed"), RelayReleaseError.SUBJECT_INVALID);
+  }
+
+  @Test
+  void filterInvalidValueIsAliasedToSubjectInvalid() {
+    // The backend currently emits filter.invalid_value for a malformed subject value.
+    assertErrorMapping(400, problem("filter.invalid_value"), RelayReleaseError.SUBJECT_INVALID);
+  }
+
+  @Test
   void sourceUnavailableMapsToUnavailable() {
     // release.source_unavailable (503) collapses into the fail-closed UNAVAILABLE outcome.
     assertErrorMapping(503, problem("release.source_unavailable"), RelayReleaseError.UNAVAILABLE);

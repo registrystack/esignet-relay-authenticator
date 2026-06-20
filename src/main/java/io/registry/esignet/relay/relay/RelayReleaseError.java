@@ -34,7 +34,15 @@ public enum RelayReleaseError {
   /** {@code auth.purpose_denied} (403): purpose not permitted by policy. Config/auth error. */
   PURPOSE_DENIED("auth.purpose_denied"),
 
-  /** {@code release.subject_invalid} (400): bad id type or malformed subject value. */
+  /**
+   * {@code release.subject_invalid} (400): bad id type or malformed subject value.
+   *
+   * <p>The Relay backend additionally (as of the {@code attribute_release.rs} handler reviewed
+   * 2026-06-20) emits the generic {@code filter.not_allowed} / {@code filter.invalid_value} codes for
+   * subject id-type / value validation instead of {@code release.subject_invalid}. Both are aliased
+   * to this outcome in {@link #fromCode(String)} so a misconfigured subject id-type surfaces as an
+   * invalid request rather than a generic subject denial, regardless of which code the backend sends.
+   */
   SUBJECT_INVALID("release.subject_invalid"),
 
   /** {@code release.source_unavailable} (503): source read failed. Fail closed. */
@@ -54,6 +62,11 @@ public enum RelayReleaseError {
 
   /** Safe generic fallback for any unknown/unmapped/absent {@code code}. */
   UNKNOWN(null);
+
+  /** Generic filter codes the backend currently emits for subject id-type/value validation. */
+  private static final String FILTER_NOT_ALLOWED = "filter.not_allowed";
+
+  private static final String FILTER_INVALID_VALUE = "filter.invalid_value";
 
   private final String wireCode;
 
@@ -82,6 +95,12 @@ public enum RelayReleaseError {
       return UNKNOWN;
     }
     String trimmed = code.trim();
+    // The backend currently emits the generic filter.* codes for subject id-type/value validation
+    // instead of release.subject_invalid; alias them so a bad subject id-type/value is reported as
+    // an invalid request rather than a generic subject denial.
+    if (FILTER_NOT_ALLOWED.equals(trimmed) || FILTER_INVALID_VALUE.equals(trimmed)) {
+      return SUBJECT_INVALID;
+    }
     for (RelayReleaseError e : values()) {
       if (e.wireCode != null && e.wireCode.equals(trimmed)) {
         return e;

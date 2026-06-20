@@ -150,6 +150,14 @@ them alertable.
 | `release.subject_invalid` | 400 | bad id type or malformed subject value | invalid request (also catch before sending) |
 | `release.source_unavailable` | 503 | source read failed | relay-unavailable, fail closed |
 
+> **Backend drift (2026-06-20):** the current Relay handler (`src/api/attribute_release.rs`)
+> emits the generic `filter.not_allowed` / `filter.invalid_value` (400) codes for subject
+> id-type/value validation instead of `release.subject_invalid`, even though
+> `ReleaseError::SubjectInvalid` exists in its taxonomy. The plugin **aliases both filter
+> codes to `subject_invalid`** so a misconfigured subject id-type surfaces as an invalid
+> request, not a generic denial. Raised with the Relay team; remove the alias once the
+> backend emits `release.subject_invalid`.
+
 Transport level (no problem document): connect/read timeout or no response →
 treat as relay-unavailable, fail closed.
 
