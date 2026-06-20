@@ -20,6 +20,8 @@
         <spring.version>6.1.14</spring.version>
         <spring.boot.version>3.3.5</spring.boot.version>
 
+        <jackson.version>2.17.2</jackson.version>
+
         <junit.version>5.11.3</junit.version>
         <mockito.version>5.14.2</mockito.version>
 
@@ -48,6 +50,30 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-autoconfigure</artifactId>
             <version>${spring.boot.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- JSON for the Relay client. eSignet provides Jackson at runtime, so this is
+             provided scope; provided is on the compile and test classpaths, which the
+             Relay contract tests need. Pinned to a recent 2.17.x line. jackson-core and
+             jackson-annotations are pinned to the same version to avoid a split-version
+             classpath (databind 2.17 calls jackson-core 2.16+ APIs). -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-core</artifactId>
+            <version>${jackson.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
+            <version>${jackson.version}</version>
             <scope>provided</scope>
         </dependency>
 
