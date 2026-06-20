@@ -73,6 +73,10 @@ mvn -DskipTests package  # build the JAR only
 
 The artifact is `target/esignet-relay-authenticator-<version>.jar`.
 
+Tagging a release (`v*`) publishes that JAR as a GitHub Release asset
+(`.github/workflows/release.yml`) so downstream deployments can consume a pinned
+version — see [`docs/registry-lab-deployment.md`](docs/registry-lab-deployment.md).
+
 ## Run the tests
 
 ```bash
@@ -257,6 +261,8 @@ Stable internal codes selected from the Relay RFC 9457 `code` (full table in the
 - **Integration smoke test.** This repository's tests are self-contained. An
   end-to-end smoke test against a running eSignet + a live Relay
   (e.g. via `registry-lab`) is **not** included here and remains a follow-up.
+  See [`docs/registry-lab-deployment.md`](docs/registry-lab-deployment.md) for
+  how to wire the plugin into the lab.
 
 ---
 
@@ -264,6 +270,8 @@ Stable internal codes selected from the Relay RFC 9457 `code` (full table in the
 
 - [`docs/esignet-configuration.md`](docs/esignet-configuration.md) — full
   property reference, keystore setup, and `esignet-with-plugins` packaging.
+- [`docs/registry-lab-deployment.md`](docs/registry-lab-deployment.md) — how to
+  deploy the plugin JAR into the `registry-lab` stack for end-to-end testing.
 - [`docs/relay-attribute-release-contract.md`](docs/relay-attribute-release-contract.md)
   — the Relay wire contract used by the client and its test stub.
 - [`docs/esignet-relay-authenticator-plugin-spec.md`](docs/esignet-relay-authenticator-plugin-spec.md)

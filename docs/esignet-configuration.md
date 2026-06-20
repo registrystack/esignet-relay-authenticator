@@ -174,12 +174,23 @@ all secrets in any `toString`/log output.
 eSignet's plugin-enabled distribution (`esignet-with-plugins`) loads plugin JARs
 from a plugins directory on the classpath / loader path.
 
-1. Build the plugin JAR:
+1. Obtain the plugin JAR — either download a released asset (preferred, pinned):
+
+   ```bash
+   VERSION=0.1.0
+   curl -fsSL -o esignet-relay-authenticator-${VERSION}.jar \
+     https://github.com/jeremi/esignet-relay-authenticator/releases/download/v${VERSION}/esignet-relay-authenticator-${VERSION}.jar
+   ```
+
+   …or build it from source:
 
    ```bash
    mvn -DskipTests package
    # → target/esignet-relay-authenticator-<version>.jar
    ```
+
+   Releases are cut by tagging `v*`, which publishes the JAR via
+   `.github/workflows/release.yml`.
 
 2. Place the JAR in the eSignet plugins directory used by your deployment
    (e.g. the `loader_path` / `${mosip.esignet.integration.plugin-dir}` mounted
@@ -210,4 +221,6 @@ runtime's library versions.
   (visible in Relay access logs as `POST .../resolve`), not a row-read API.
 - An end-to-end smoke test against a running eSignet + live Relay
   (e.g. via `registry-lab`) is **not** part of this repository's test suite and
-  remains a deployment-time follow-up.
+  remains a deployment-time follow-up. See
+  [`registry-lab-deployment.md`](registry-lab-deployment.md) for the lab
+  deployment checklist.
