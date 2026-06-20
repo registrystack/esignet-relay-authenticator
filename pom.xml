@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>io.registry.esignet</groupId>
+    <artifactId>esignet-relay-authenticator</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>eSignet Relay Authenticator</name>
+    <description>eSignet Authenticator plugin backed by Registry Relay governed attribute release</description>
+
+    <properties>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <esignet.integration.api.version>1.8.0</esignet.integration.api.version>
+        <spring.version>6.1.14</spring.version>
+        <spring.boot.version>3.3.5</spring.boot.version>
+
+        <jackson.version>2.17.2</jackson.version>
+
+        <junit.version>5.11.3</junit.version>
+        <mockito.version>5.14.2</mockito.version>
+        <!-- TEST SCOPE ONLY. Tests use BouncyCastle to generate an RSA-2048 keypair and a
+             self-signed X.509 certificate and load them into an in-memory KeyStore that exercises
+             KycSigningKeyService / UserInfoSigner through their PRODUCTION code path. There is NO
+             BouncyCastle dependency in main code (main uses pure JDK crypto only). -->
+        <bouncycastle.version>1.78.1</bouncycastle.version>
+
+        <maven.compiler.plugin.version>3.13.0</maven.compiler.plugin.version>
+        <maven.surefire.plugin.version>3.5.1</maven.surefire.plugin.version>
+        <maven.jar.plugin.version>3.4.1</maven.jar.plugin.version>
+    </properties>
+
+    <dependencies>
+        <!-- eSignet integration interface. Provided by the eSignet runtime at deploy time. -->
+        <dependency>
+            <groupId>io.mosip.esignet</groupId>
+            <artifactId>esignet-integration-api</artifactId>
+            <version>${esignet.integration.api.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Spring component + conditional bean loading. Provided by the eSignet runtime. -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>${spring.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-autoconfigure</artifactId>
+            <version>${spring.boot.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- JSON for the Relay client. eSignet provides Jackson at runtime, so this is
+             provided scope; provided is on the compile and test classpaths, which the
+             Relay contract tests need. Pinned to a recent 2.17.x line. jackson-core and
+             jackson-annotations are pinned to the same version to avoid a split-version
+             classpath (databind 2.17 calls jackson-core 2.16+ APIs). -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-core</artifactId>
+            <version>${jackson.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
+            <version>${jackson.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Test -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>${mockito.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- TEST SCOPE ONLY: generates deterministic RSA test keys + self-signed certs for the
+             signing tests. Not on the runtime/main classpath; main code is pure JDK crypto. -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>${maven.compiler.plugin.version}</version>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${maven.surefire.plugin.version}</version>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>${maven.jar.plugin.version}</version>
+            </plugin>
+        </plugins>
+    </build>
+</project>

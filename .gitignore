@@ -1,0 +1,19 @@
+target/
+*.class
+*.jar
+*.log
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Never commit signing keystores, certificates, or secret material.
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.pem
+*.key
+*.crt
+*.cer
+*.der

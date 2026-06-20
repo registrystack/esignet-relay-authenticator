@@ -1,0 +1,51 @@
+name: Release
+
+# Publishes a pinned plugin JAR as a GitHub Release asset so downstream
+# deployments (e.g. registry-lab) can consume a versioned artifact instead of
+# building from a branch. Push a tag like `v0.1.0` to cut a release.
+on:
+  push:
+    tags:
+      - "v*"
+
+# Required to create the Release and upload the JAR. Uses the built-in
+# GITHUB_TOKEN via the gh CLI — no third-party publish action.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Derive version from tag
+        id: ver
+        # Tag `v0.1.0` -> project/artifact version `0.1.0`.
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Pin the project version to the tag
+        run: >
+          mvn -B -ntp versions:set
+          -DnewVersion="${{ steps.ver.outputs.version }}"
+          -DgenerateBackupPoms=false
+
+      - name: Build and test
+        run: mvn -B -ntp verify
+
+      - name: Publish the JAR to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: >
+          gh release create "${GITHUB_REF_NAME}"
+          "target/esignet-relay-authenticator-${VERSION}.jar"
+          --title "${GITHUB_REF_NAME}"
+          --generate-notes
