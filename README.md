@@ -127,6 +127,7 @@ registry.esignet.auth.otp.static-value=111111
 
 registry.esignet.kyc-token.hmac-secret=${REGISTRY_ESIGNET_KYC_TOKEN_SECRET}
 registry.esignet.psut.hmac-secret=${REGISTRY_ESIGNET_PSUT_SECRET}
+registry.esignet.user-info.issuer=${REGISTRY_ESIGNET_USER_INFO_ISSUER}
 registry.esignet.kyc.signing.keystore-path=${REGISTRY_ESIGNET_KYC_KEYSTORE_PATH}
 registry.esignet.kyc.signing.keystore-password=${REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD}
 registry.esignet.kyc.signing.key-alias=${REGISTRY_ESIGNET_KYC_KEY_ALIAS}
@@ -181,6 +182,7 @@ fails; the signing key must be **RSA ≥ 2048 bits**.
 | `registry.relay.auth.bearer-token` | `REGISTRY_RELAY_TOKEN` | Bearer credential for Relay |
 | `registry.esignet.kyc-token.hmac-secret` | `REGISTRY_ESIGNET_KYC_TOKEN_SECRET` | HS256 key for the internal KYC token (≥ 32 chars) |
 | `registry.esignet.psut.hmac-secret` | `REGISTRY_ESIGNET_PSUT_SECRET` | HMAC key for PSUT derivation (must differ from the KYC token secret; ≥ 32 chars) |
+| `registry.esignet.user-info.issuer` | `REGISTRY_ESIGNET_USER_INFO_ISSUER` | Issuer written into signed UserInfo JWTs, usually the public eSignet/OIDC issuer URL |
 | `registry.esignet.kyc.signing.keystore-path` | `REGISTRY_ESIGNET_KYC_KEYSTORE_PATH` | Path to the RSA signing keystore (PKCS12/JKS, RSA ≥ 2048-bit) |
 | `registry.esignet.kyc.signing.keystore-password` | `REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD` | Keystore password |
 | `registry.esignet.kyc.signing.key-alias` | `REGISTRY_ESIGNET_KYC_KEY_ALIAS` | Signing key alias |

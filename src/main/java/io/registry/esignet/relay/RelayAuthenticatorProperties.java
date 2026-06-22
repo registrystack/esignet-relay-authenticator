@@ -156,6 +156,15 @@ public class RelayAuthenticatorProperties {
 
     // --- Security-sensitive: signing keystore, required only for self-contained-jws ---
     if (Esignet.Kyc.RESPONSE_MODE_SELF_CONTAINED_JWS.equals(esignet.kyc.responseMode)) {
+      Esignet.UserInfo userInfo = esignet.userInfo;
+      if (isBlank(userInfo.issuer)) {
+        problems.add(
+            "registry.esignet.user-info.issuer must be set for"
+                + " response-mode=self-contained-jws");
+      } else if (!isAbsoluteHttpUrl(userInfo.issuer)) {
+        problems.add("registry.esignet.user-info.issuer must be a valid absolute http(s) URL");
+      }
+
       Esignet.Kyc.Signing s = esignet.kyc.signing;
       if (isBlank(s.keystorePath)) {
         problems.add(
@@ -472,6 +481,7 @@ public class RelayAuthenticatorProperties {
     private Auth auth = new Auth();
     private KycToken kycToken = new KycToken();
     private Psut psut = new Psut();
+    private UserInfo userInfo = new UserInfo();
     private Kyc kyc = new Kyc();
 
     /**
@@ -546,7 +556,15 @@ public class RelayAuthenticatorProperties {
     }
 
     public void setPsut(Psut psut) {
-      this.psut = psut;
+      this.psut = psut == null ? new Psut() : psut;
+    }
+
+    public UserInfo getUserInfo() {
+      return userInfo;
+    }
+
+    public void setUserInfo(UserInfo userInfo) {
+      this.userInfo = userInfo == null ? new UserInfo() : userInfo;
     }
 
     public Kyc getKyc() {
@@ -565,6 +583,8 @@ public class RelayAuthenticatorProperties {
           + kycToken
           + ", psut="
           + psut
+          + ", userInfo="
+          + userInfo
           + ", kyc="
           + kyc
           + ", accountCheckClaims="
@@ -704,6 +724,28 @@ public class RelayAuthenticatorProperties {
       @Override
       public String toString() {
         return "Psut{hmacSecret=" + (hmacSecret == null ? "null" : REDACTED) + "}";
+      }
+    }
+
+    /** {@code registry.esignet.user-info.*} group. */
+    public static class UserInfo {
+      /**
+       * Issuer written into signed UserInfo JWTs. Relying parties usually expect the eSignet/OIDC
+       * issuer URL here.
+       */
+      private String issuer;
+
+      public String getIssuer() {
+        return issuer;
+      }
+
+      public void setIssuer(String issuer) {
+        this.issuer = issuer;
+      }
+
+      @Override
+      public String toString() {
+        return "UserInfo{issuer=" + issuer + "}";
       }
     }
 

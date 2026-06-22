@@ -109,6 +109,7 @@ Inject these as the lab's secret mounts or environment — never commit them
 | `REGISTRY_RELAY_TOKEN` | Relay bearer credential (with the release scope) |
 | `REGISTRY_ESIGNET_KYC_TOKEN_SECRET` | internal KYC token HMAC (≥ 32 chars) |
 | `REGISTRY_ESIGNET_PSUT_SECRET` | PSUT HMAC (≥ 32 chars, **distinct** from above) |
+| `REGISTRY_ESIGNET_USER_INFO_ISSUER` | signed UserInfo JWT issuer, usually the public eSignet/OIDC issuer URL |
 | `REGISTRY_ESIGNET_KYC_KEYSTORE_PATH` | RSA signing keystore location (mounted) |
 | `REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD` | keystore password |
 | `REGISTRY_ESIGNET_KYC_KEY_ALIAS` | signing key alias |

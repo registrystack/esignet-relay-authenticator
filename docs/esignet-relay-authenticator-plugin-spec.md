@@ -361,6 +361,9 @@ registry.esignet.kyc-token.hmac-secret=${REGISTRY_ESIGNET_KYC_TOKEN_SECRET}
 registry.esignet.kyc-token.ttl-seconds=300
 registry.esignet.psut.hmac-secret=${REGISTRY_ESIGNET_PSUT_SECRET}
 
+# Signed UserInfo JWT protocol claims
+registry.esignet.user-info.issuer=${REGISTRY_ESIGNET_USER_INFO_ISSUER}
+
 # Claim mapping (eSignet/OIDC UserInfo claim name -> Relay source token).
 # $psut marks a protocol-derived claim (the PSUT) supplied locally, never requested from Relay.
 # Dotted keys bind via claim-map[<dotted.name>]. Defaults to the map below when unset.
@@ -809,6 +812,7 @@ registry.esignet.auth.otp.static-value=111111
 
 registry.esignet.kyc-token.hmac-secret=${REGISTRY_ESIGNET_KYC_TOKEN_SECRET}
 registry.esignet.psut.hmac-secret=${REGISTRY_ESIGNET_PSUT_SECRET}
+registry.esignet.user-info.issuer=${REGISTRY_ESIGNET_USER_INFO_ISSUER}
 registry.esignet.kyc.signing.keystore-path=${REGISTRY_ESIGNET_KYC_KEYSTORE_PATH}
 registry.esignet.kyc.signing.keystore-password=${REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD}
 registry.esignet.kyc.signing.key-alias=${REGISTRY_ESIGNET_KYC_KEY_ALIAS}

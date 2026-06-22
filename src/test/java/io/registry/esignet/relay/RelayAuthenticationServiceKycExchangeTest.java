@@ -141,6 +141,15 @@ class RelayAuthenticationServiceKycExchangeTest {
             Base64.getUrlDecoder().decode(parts[1]), new TypeReference<Map<String, Object>>() {});
     String expectedPsut = kycTokenService.derivePsut(RP, CLIENT, ID_TYPE, INDIVIDUAL_ID);
     assertEquals(expectedPsut, payload.get("sub"), "sub must equal the derived PSUT");
+    assertEquals(
+        props.getEsignet().getUserInfo().getIssuer(),
+        payload.get("iss"),
+        "signed UserInfo issuer must be configured");
+    assertEquals(CLIENT, payload.get("aud"), "signed UserInfo audience must be the OIDC client");
+    assertEquals(
+        300,
+        ((Number) payload.get("exp")).longValue() - ((Number) payload.get("iat")).longValue(),
+        "signed UserInfo lifetime should follow the verified KYC token lifetime");
     assertEquals("NID-2001", payload.get("individual_id"));
     assertEquals("Maria", payload.get("given_name"));
     assertEquals("Maria Santos", payload.get("name"));
@@ -252,7 +261,17 @@ class RelayAuthenticationServiceKycExchangeTest {
             new TypeReference<Map<String, Object>>() {});
     String expectedPsut = kycTokenService.derivePsut(RP, CLIENT, ID_TYPE, INDIVIDUAL_ID);
     assertEquals(expectedPsut, payload.get("sub"), "sub must equal the derived PSUT");
-    assertEquals(1, payload.size(), "only sub may be present — no profile defaults released");
+    assertEquals(
+        props.getEsignet().getUserInfo().getIssuer(),
+        payload.get("iss"),
+        "signed UserInfo issuer is protocol metadata, not a released attribute");
+    assertEquals(CLIENT, payload.get("aud"), "signed UserInfo audience is protocol metadata");
+    assertTrue(payload.containsKey("iat"), "signed UserInfo must carry iat");
+    assertTrue(payload.containsKey("exp"), "signed UserInfo must carry exp");
+    assertEquals(
+        5,
+        payload.size(),
+        "only protocol claims may be present — no profile defaults released");
     assertFalse(payload.containsKey("gender"), "a non-profile claim must never be released");
   }
 
@@ -330,6 +349,8 @@ class RelayAuthenticationServiceKycExchangeTest {
     // Same claim values as a standard exchange for the same inputs.
     String expectedPsut = kycTokenService.derivePsut(RP, CLIENT, ID_TYPE, INDIVIDUAL_ID);
     assertEquals(expectedPsut, payload.get("sub"));
+    assertEquals(props.getEsignet().getUserInfo().getIssuer(), payload.get("iss"));
+    assertEquals(CLIENT, payload.get("aud"));
     assertEquals("NID-2001", payload.get("individual_id"));
     assertEquals("Maria Santos", payload.get("name"));
 

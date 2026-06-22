@@ -83,7 +83,13 @@ manager — never hard-coded.
 | `registry.esignet.kyc-token.ttl-seconds` | `300` | KYC token TTL. Keep short (replay mitigation). |
 | `registry.esignet.psut.hmac-secret` | `${REGISTRY_ESIGNET_PSUT_SECRET}` | HMAC key for PSUT derivation. **Must differ** from the KYC token secret (enforced fail-fast at startup) and be **≥ 32 characters**. |
 
-### 2.5 KYC/UserInfo signing (keystore)
+### 2.5 Signed UserInfo JWT claims
+
+| Property | Default | Notes |
+|---|---|---|
+| `registry.esignet.user-info.issuer` | `${REGISTRY_ESIGNET_USER_INFO_ISSUER}` | Issuer written into signed UserInfo JWTs. Usually set this to the public eSignet/OIDC issuer URL trusted by relying parties. |
+
+### 2.6 KYC/UserInfo signing (keystore)
 
 | Property | Default | Notes |
 |---|---|---|
@@ -95,7 +101,7 @@ manager — never hard-coded.
 | `registry.esignet.kyc.signing.key-password` | `${REGISTRY_ESIGNET_KYC_KEY_PASSWORD}` | Signing key password. |
 | `registry.esignet.kyc.signing.algorithm` | `RS256` | JWS algorithm. |
 
-### 2.6 Claim mapping
+### 2.7 Claim mapping
 
 Maps Relay-released claims (and the plugin-derived PSUT) into eSignet/OIDC
 UserInfo claims. `$psut` marks a protocol-derived claim supplied locally and
@@ -162,6 +168,7 @@ from the public key, so re-deploying with the same key yields the same `kid`.
 | `REGISTRY_RELAY_TOKEN` | `registry.relay.auth.bearer-token` |
 | `REGISTRY_ESIGNET_KYC_TOKEN_SECRET` | `registry.esignet.kyc-token.hmac-secret` |
 | `REGISTRY_ESIGNET_PSUT_SECRET` | `registry.esignet.psut.hmac-secret` |
+| `REGISTRY_ESIGNET_USER_INFO_ISSUER` | `registry.esignet.user-info.issuer` |
 | `REGISTRY_ESIGNET_KYC_KEYSTORE_PATH` | keystore location |
 | `REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD` | keystore password |
 | `REGISTRY_ESIGNET_KYC_KEY_ALIAS` | signing key alias |

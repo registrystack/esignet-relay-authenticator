@@ -63,11 +63,12 @@ import org.springframework.stereotype.Component;
  * <p><b>M7 implements:</b> {@link #doKycExchange(String, String, KycExchangeDto)} and
  * {@link #doVerifiedKycExchange(String, String, VerifiedKycExchangeDto)}, which verify the KYC token,
  * request only the consented + profile-filtered claims from Relay, map them into the eSignet UserInfo
- * (subject from the PSUT), and sign as RS256 JWS via {@link UserInfoSigner}. A JWE response request
- * fails closed ({@link UserInfoSigner#ERR_JWE_UNSUPPORTED}) and emits no token, because the RP
- * encryption key is not available to the plugin. The verified variant does NOT synthesize assurance
- * metadata — Relay V1 returns none and the plugin must not fabricate it — so it currently equals the
- * standard exchange output.
+ * (subject from the PSUT), add the standard signed-UserInfo issuer/audience/time claims, and sign as
+ * RS256 JWS via {@link UserInfoSigner}. A JWE response request fails closed ({@link
+ * UserInfoSigner#ERR_JWE_UNSUPPORTED}) and emits no token, because the RP encryption key is not
+ * available to the plugin. The verified variant does NOT synthesize assurance metadata — Relay V1
+ * returns none and the plugin must not fabricate it — so it currently equals the standard exchange
+ * output.
  *
  * <p><b>doKycAuth flow:</b> validate input → verify the challenge (no Relay call if it fails) →
  * account-check via Relay with the configured minimal claim list (default {@code ["individual_id"]},
@@ -78,7 +79,8 @@ import org.springframework.stereotype.Component;
  * bad) → fail closed on a JWE request BEFORE any release → reduce accepted claims to
  * {@code intersection(accepted, profile)} → release via Relay only when that set is non-empty (an
  * empty set would make Relay return its profile defaults, so it is skipped and nothing is released) →
- * map into the eSignet UserInfo (subject from the PSUT) → sign as JWS.
+ * map into the eSignet UserInfo (subject from the PSUT) → add standard signed-UserInfo claims → sign
+ * as JWS.
  *
  * <p><b>Privacy:</b> logs carry only safe fields (transaction id, client id); never the individual
  * id, OTP, KYC token, bearer token, PSUT, or any released attribute value.
@@ -447,7 +449,8 @@ public class RelayAuthenticationService implements Authenticator {
    * locally, never requested) → call Relay attribute release with that consented list, but ONLY when
    * it is non-empty (an empty list would make Relay release its profile defaults, so the call is
    * skipped and nothing is released) → map the released claims into the eSignet UserInfo with
-   * {@code sub} derived from the PSUT → sign as JWS via {@link UserInfoSigner}.
+   * {@code sub} derived from the PSUT → add signed-UserInfo standard claims ({@code iss},
+   * {@code aud}, {@code iat}, {@code exp}) → sign as JWS via {@link UserInfoSigner}.
    *
    * <p><b>Privacy:</b> logs carry only safe fields (transaction id, client id); never the individual
    * id, KYC token, PSUT, released attribute values, or the Relay body.
@@ -559,6 +562,7 @@ public class RelayAuthenticationService implements Authenticator {
       // 8. Map Relay's released claims into the eSignet UserInfo, sub derived from the PSUT.
       Map<String, Object> userInfo =
           claimMapper.toUserInfo(releasedClaims, psut, acceptedClaims);
+      addSignedUserInfoClaims(userInfo, claims);
 
       // 9. Package as signed JWS. A JWE request was already rejected in step 3; pack() still guards
       //    defensively and never returns unencrypted data for a JWE request.
@@ -591,5 +595,12 @@ public class RelayAuthenticationService implements Authenticator {
 
   private static boolean isBlank(String s) {
     return s == null || s.isBlank();
+  }
+
+  private void addSignedUserInfoClaims(Map<String, Object> userInfo, KycTokenClaims claims) {
+    userInfo.put("iss", properties.getEsignet().getUserInfo().getIssuer());
+    userInfo.put("aud", claims.getClientId());
+    userInfo.put("iat", claims.getIat());
+    userInfo.put("exp", claims.getExp());
   }
 }

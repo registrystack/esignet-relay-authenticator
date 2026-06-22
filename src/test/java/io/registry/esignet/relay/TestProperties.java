@@ -43,6 +43,7 @@ public final class TestProperties {
     esignet.getKycToken().setHmacSecret("kyc-token-hmac-secret-0123456789abcdef");
     esignet.getKycToken().setTtlSeconds(300);
     esignet.getPsut().setHmacSecret("psut-hmac-secret-0123456789abcdef0123");
+    esignet.getUserInfo().setIssuer("https://esignet.example.test");
 
     // Default response mode is self-contained-jws, so signing keystore settings are required.
     esignet.getKyc().setResponseMode("self-contained-jws");

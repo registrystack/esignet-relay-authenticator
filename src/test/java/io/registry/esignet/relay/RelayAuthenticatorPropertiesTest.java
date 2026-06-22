@@ -209,6 +209,32 @@ class RelayAuthenticatorPropertiesTest {
   }
 
   @Test
+  void selfContainedJwsRequiresUserInfoIssuer() {
+    RelayAuthenticatorProperties props = TestProperties.valid();
+    props.getEsignet().getUserInfo().setIssuer(null);
+
+    RelayAuthenticatorConfigException ex =
+        assertThrows(RelayAuthenticatorConfigException.class, props::validate);
+    assertTrue(
+        ex.getProblems().stream()
+            .anyMatch(p -> p.contains("registry.esignet.user-info.issuer")),
+        "should require the issuer for signed UserInfo JWTs");
+  }
+
+  @Test
+  void userInfoIssuerMustBeAbsoluteHttpUrl() {
+    RelayAuthenticatorProperties props = TestProperties.valid();
+    props.getEsignet().getUserInfo().setIssuer("not-a-url");
+
+    RelayAuthenticatorConfigException ex =
+        assertThrows(RelayAuthenticatorConfigException.class, props::validate);
+    assertTrue(
+        ex.getProblems().stream()
+            .anyMatch(p -> p.contains("registry.esignet.user-info.issuer")),
+        "should reject a non-absolute UserInfo issuer URL");
+  }
+
+  @Test
   void nonJwsResponseModeDoesNotRequireKeystore() {
     RelayAuthenticatorProperties props = TestProperties.valid();
     props.getEsignet().getKyc().setResponseMode("plain");
@@ -216,6 +242,7 @@ class RelayAuthenticatorPropertiesTest {
     props.getEsignet().getKyc().getSigning().setKeystorePassword(null);
     props.getEsignet().getKyc().getSigning().setKeyAlias(null);
     props.getEsignet().getKyc().getSigning().setKeyPassword(null);
+    props.getEsignet().getUserInfo().setIssuer(null);
 
     assertDoesNotThrow(props::validate);
   }
