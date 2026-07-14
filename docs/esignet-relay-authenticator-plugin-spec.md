@@ -23,7 +23,7 @@ https://github.com/jeremi/esignet-relay-authenticator
 Build an eSignet Authenticator plugin that uses Registry Relay as the account
 and identity attribute source.
 
-Do not edit `registry-relay`, `registry-lab`, `registry-internal`, MOSIP
+Do not edit `registry-relay`, `solmara-lab`, `registry-internal`, MOSIP
 eSignet, or MOSIP plugin repositories. This repository should contain the plugin
 code, tests, build files, packaging instructions, and a local contract fixture
 for the Relay endpoint it expects.
@@ -345,9 +345,8 @@ registry.relay.connect-timeout-ms=2000
 registry.relay.read-timeout-ms=5000
 
 # Relay authorization. Always sent as Authorization: Bearer on the wire.
-# credential-kind is an operator label for validation/docs, not a header scheme.
-registry.relay.auth.credential-kind=api_key
-registry.relay.auth.bearer-token=${REGISTRY_RELAY_TOKEN}
+# Reloaded from this absolute-path regular file before every Relay request.
+registry.relay.auth.bearer-token-file=${REGISTRY_RELAY_AUTH_BEARER_TOKEN_FILE}
 
 # Authentication challenge verification
 registry.esignet.auth.supported-factors=OTP
@@ -717,7 +716,7 @@ Guidelines:
 Add tests for at least:
 
 - Spring conditional bean loading property value.
-- Configuration validation, including missing Relay token and missing HMAC
+- Configuration validation, including missing Relay token file and missing HMAC
   secret.
 - Supported OTP channel and unsupported channel behavior.
 - Static OTP disabled by default.
@@ -800,8 +799,7 @@ registry.relay.base-url=http://registry-relay:8080
 registry.relay.attribute-release.profile-id=esignet-civil-userinfo
 registry.relay.attribute-release.profile-version=v1
 registry.relay.attribute-release.purpose=https://demo.example.gov/purpose/esignet-identity-verification
-registry.relay.auth.credential-kind=api_key
-registry.relay.auth.bearer-token=${REGISTRY_RELAY_TOKEN}
+registry.relay.auth.bearer-token-file=${REGISTRY_RELAY_AUTH_BEARER_TOKEN_FILE}
 
 registry.esignet.auth.supported-factors=OTP
 registry.esignet.auth.otp.static-enabled=true
@@ -870,4 +868,4 @@ The work is complete when:
 - KYC exchange requests only consented, profile-filtered claims.
 - Secrets and released attributes are redacted from logs.
 - The PR clearly names any remaining integration smoke test that requires
-  `registry-lab` or a running eSignet deployment.
+  `solmara-lab` or a running eSignet deployment.

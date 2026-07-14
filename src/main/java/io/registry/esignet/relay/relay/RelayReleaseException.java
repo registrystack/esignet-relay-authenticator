@@ -6,8 +6,8 @@ package io.registry.esignet.relay.relay;
  *
  * <p>The message and the carried wire {@code code} are deliberately coarse: for {@link
  * RelayReleaseError#SUBJECT_DENIED} no sub-reason is ever present (Relay collapses them), and no Relay
- * response body, subject value, or bearer token is ever stored on this exception. Callers map this
- * to the appropriate eSignet exception in a later milestone.
+ * response body, subject value, bearer token, or bearer-token file path is ever stored on this
+ * exception. Callers map this to the appropriate eSignet exception in a later milestone.
  */
 public class RelayReleaseException extends Exception {
 

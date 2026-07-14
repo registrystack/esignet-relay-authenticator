@@ -21,15 +21,32 @@ class RelayAuthenticatorPropertiesTest {
   }
 
   @Test
-  void missingRelayBearerTokenFailsFast() {
+  void missingRelayBearerTokenFileFailsFast() {
     RelayAuthenticatorProperties props = TestProperties.valid();
-    props.getRelay().getAuth().setBearerToken(null);
+    props.getRelay().getAuth().setBearerTokenFile(null);
 
     RelayAuthenticatorConfigException ex =
         assertThrows(RelayAuthenticatorConfigException.class, props::validate);
     assertTrue(
-        ex.getProblems().stream().anyMatch(p -> p.contains("registry.relay.auth.bearer-token")),
-        "should report the missing Relay bearer token");
+        ex.getProblems().stream()
+            .anyMatch(p -> p.contains("registry.relay.auth.bearer-token-file")),
+        "should report the missing Relay bearer-token file");
+  }
+
+  @Test
+  void relativeRelayBearerTokenFileFailsFast() {
+    RelayAuthenticatorProperties props = TestProperties.valid();
+    props.getRelay().getAuth().setBearerTokenFile("secrets/registry-relay-token");
+
+    RelayAuthenticatorConfigException ex =
+        assertThrows(RelayAuthenticatorConfigException.class, props::validate);
+    assertTrue(
+        ex.getProblems().stream()
+            .anyMatch(
+                p ->
+                    p.contains("registry.relay.auth.bearer-token-file")
+                        && p.contains("absolute")),
+        "should reject a relative Relay bearer-token path");
   }
 
   @Test
@@ -223,9 +240,12 @@ class RelayAuthenticatorPropertiesTest {
   @Test
   void toStringRedactsAllSecrets() {
     RelayAuthenticatorProperties props = TestProperties.valid();
+    String bearerTokenFile = props.getRelay().getAuth().getBearerTokenFile();
     String rendered = props.toString();
 
-    assertFalse(rendered.contains("relay-test-token"), "bearer token must be redacted");
+    assertFalse(
+        rendered.contains(bearerTokenFile),
+        "bearer-token file path must be redacted");
     assertFalse(
         rendered.contains("kyc-token-hmac-secret-0123456789abcdef"),
         "KYC-token secret must be redacted");
@@ -242,7 +262,7 @@ class RelayAuthenticatorPropertiesTest {
   @Test
   void multipleProblemsCollectedInOnePass() {
     RelayAuthenticatorProperties props = TestProperties.valid();
-    props.getRelay().getAuth().setBearerToken(null);
+    props.getRelay().getAuth().setBearerTokenFile(null);
     props.getEsignet().getKycToken().setHmacSecret(null);
     props.getEsignet().getPsut().setHmacSecret(null);
 

@@ -1,14 +1,14 @@
-# Deploying the plugin into registry-lab
+# Deploying the plugin into Solmara Lab
 
-How to run the **eSignet Relay Authenticator** plugin inside the
-[`registry-lab`](https://github.com/jeremi/registry-lab) stack against a live
-Relay, for end-to-end smoke testing.
+How to run the **eSignet Relay Authenticator** plugin inside
+[`solmara-lab`](https://github.com/registrystack/solmara-lab) against a live
+Relay for end-to-end smoke testing.
 
 This repo produces a **thin authenticator JAR** that eSignet side-loads; it is
-not a service and has no image of its own. The lab orchestration (compose files
-/ manifests, the eSignet service, and the Relay) lives in `registry-lab`. This
-guide is the **plugin-side checklist** — what the lab must mount, configure, and
-provision. Apply the actual compose/manifest edits in `registry-lab`.
+not a service and has no image of its own. Solmara Lab owns the Compose files,
+eSignet service, and authority Relay. This guide is the plugin-side checklist
+for what Solmara Lab must mount, configure, and provision. Apply actual
+orchestration edits in `solmara-lab`.
 
 See [`esignet-configuration.md`](esignet-configuration.md) for the full property
 reference and keystore setup, and
@@ -32,7 +32,7 @@ the Relay wire contract.
 
 ## 1. Get the plugin JAR
 
-**Preferred — a released artifact.** Tagging this repo (`v*`) publishes a pinned
+**Preferred, a released artifact.** Tagging this repo (`v*`) publishes a pinned
 JAR as a GitHub Release asset (see `.github/workflows/release.yml`). The lab can
 download it deterministically:
 
@@ -42,7 +42,7 @@ curl -fsSL -o esignet-relay-authenticator-${VERSION}.jar \
   https://github.com/jeremi/esignet-relay-authenticator/releases/download/v${VERSION}/esignet-relay-authenticator-${VERSION}.jar
 ```
 
-**Alternative — build from source** (until a version is tagged; the default
+**Alternative, build from source** (until a version is tagged; the default
 build is `0.1.0-SNAPSHOT`):
 
 ```bash
@@ -60,7 +60,7 @@ Place the JAR in the eSignet plugins directory used by the lab's
 mount or volume into the loader path, e.g.:
 
 ```yaml
-# registry-lab: esignet service (illustrative — match the lab's actual paths)
+# solmara-lab: esignet service (illustrative, match the lab's actual paths)
 services:
   esignet:
     image: <esignet-with-plugins image>
@@ -71,7 +71,7 @@ services:
 ```
 
 The exact loader path and mount convention are defined by the lab's eSignet
-image — align with what `registry-lab` already uses for plugin JARs.
+image. Align with what `solmara-lab` already uses for plugin JARs.
 
 ## 3. Configuration
 
@@ -90,8 +90,8 @@ registry.relay.attribute-release.profile-version=v1
 registry.relay.attribute-release.purpose=<lab purpose URI>
 registry.relay.subject.id-type=national_id
 
-# Relay authorization — always Authorization: Bearer
-registry.relay.auth.bearer-token=${REGISTRY_RELAY_TOKEN}
+# Relay authorization, always Authorization: Bearer
+registry.relay.auth.bearer-token-file=${REGISTRY_RELAY_AUTH_BEARER_TOKEN_FILE}
 ```
 
 > Use `https` for `base-url` to anything other than a loopback host: a plaintext
@@ -101,12 +101,12 @@ registry.relay.auth.bearer-token=${REGISTRY_RELAY_TOKEN}
 
 ## 4. Secrets (lab secret store / env)
 
-Inject these as the lab's secret mounts or environment — never commit them
+Inject these as the lab's secret mounts or environment. Never commit them
 (`esignet-configuration.md` §4):
 
 | Env var | Backs |
 |---|---|
-| `REGISTRY_RELAY_TOKEN` | Relay bearer credential (with the release scope) |
+| `REGISTRY_RELAY_AUTH_BEARER_TOKEN_FILE` | Absolute path to the mounted Relay bearer credential file (with the release scope) |
 | `REGISTRY_ESIGNET_KYC_TOKEN_SECRET` | internal KYC token HMAC (≥ 32 chars) |
 | `REGISTRY_ESIGNET_PSUT_SECRET` | PSUT HMAC (≥ 32 chars, **distinct** from above) |
 | `REGISTRY_ESIGNET_KYC_KEYSTORE_PATH` | RSA signing keystore location (mounted) |
@@ -129,7 +129,7 @@ The lab's Relay must be set up so the governed release call succeeds:
 - The configured **purpose is allow-listed** for that profile.
 - The Relay build includes **registry-relay PR #162** so it emits
   `release.subject_invalid` and honors `include_source_metadata` as documented.
-  Older Relay builds still work — the plugin aliases the legacy `filter.*` codes
+  Older Relay builds still work. The plugin aliases the legacy `filter.*` codes
   to `subject_invalid` for the rollout window (see
   `relay-attribute-release-contract.md`).
 
@@ -140,7 +140,7 @@ mounted, (re)start the eSignet service. Then verify (`esignet-configuration.md`
 §6):
 
 - Startup logs confirm the plugin bean is active and the signing key loaded
-  (only the non-sensitive `kid` and algorithm are logged — never key material).
+  (only the non-sensitive `kid` and algorithm are logged, never key material).
 - The eSignet KYC signing-certificates endpoint publishes a cert with the
   plugin's `kid`.
 - A first authentication shows a `POST .../resolve` in the Relay access log

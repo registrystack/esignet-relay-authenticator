@@ -58,8 +58,15 @@ manager — never hard-coded.
 
 | Property | Default | Notes |
 |---|---|---|
-| `registry.relay.auth.credential-kind` | `api_key` | Operator label for docs/validation only — **not** a header scheme. |
-| `registry.relay.auth.bearer-token` | `${REGISTRY_RELAY_TOKEN}` | The bearer credential. Sent as `Authorization: Bearer <token>`. There is no `X-API-Key` path. |
+| `registry.relay.auth.bearer-token-file` | `${REGISTRY_RELAY_AUTH_BEARER_TOKEN_FILE}` *(required)* | Absolute path to the mounted bearer credential file. Sent as `Authorization: Bearer <token>`. There is no `X-API-Key` path. |
+
+The plugin reopens this file immediately before every Relay request, so an
+atomic file replacement rotates the credential without restarting eSignet. It
+does not cache token content. The path must identify a regular file no larger
+than 16 KiB. File content must be one valid RFC 6750 bearer token encoded as
+UTF-8, with an optional single trailing LF or CRLF. Empty, malformed,
+oversized, missing, and unreadable files fail closed before any HTTP request.
+Errors and logs disclose neither the configured path nor token content.
 
 ### 2.3 Authentication challenge
 
@@ -159,7 +166,7 @@ from the public key, so re-deploying with the same key yields the same `kid`.
 
 | Env var | Backs |
 |---|---|
-| `REGISTRY_RELAY_TOKEN` | `registry.relay.auth.bearer-token` |
+| `REGISTRY_RELAY_AUTH_BEARER_TOKEN_FILE` | `registry.relay.auth.bearer-token-file` |
 | `REGISTRY_ESIGNET_KYC_TOKEN_SECRET` | `registry.esignet.kyc-token.hmac-secret` |
 | `REGISTRY_ESIGNET_PSUT_SECRET` | `registry.esignet.psut.hmac-secret` |
 | `REGISTRY_ESIGNET_KYC_KEYSTORE_PATH` | keystore location |
@@ -223,7 +230,7 @@ runtime's library versions.
 - A first authentication should call the Relay attribute-release endpoint
   (visible in Relay access logs as `POST .../resolve`), not a row-read API.
 - An end-to-end smoke test against a running eSignet + live Relay
-  (e.g. via `registry-lab`) is **not** part of this repository's test suite and
-  remains a deployment-time follow-up. See
-  [`registry-lab-deployment.md`](registry-lab-deployment.md) for the lab
-  deployment checklist.
+  (for example, via Solmara Lab) is **not** part of this repository's test suite
+  and remains a deployment-time follow-up. See
+  [`solmara-lab-deployment.md`](solmara-lab-deployment.md) for the deployment
+  checklist.

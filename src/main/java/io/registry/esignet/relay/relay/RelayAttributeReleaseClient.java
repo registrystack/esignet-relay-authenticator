@@ -23,9 +23,10 @@ import org.slf4j.LoggerFactory;
  * Client for the Registry Relay governed attribute-release endpoint.
  *
  * <p>Issues {@code POST {base-url}{path-template}} with {@code {profile_id}}/{@code {version}}
- * substituted from configuration, sends the bearer token as {@code Authorization: Bearer} (never
- * {@code X-API-Key}), and branches errors on the RFC 9457 {@code code} extension, never on the HTTP
- * status. Connect/read timeouts come from {@link RelayAuthenticatorProperties}.
+ * substituted from configuration, reloads the bearer token from its configured file, sends it as
+ * {@code Authorization: Bearer} (never {@code X-API-Key}), and branches errors on the RFC 9457
+ * {@code code} extension, never on the HTTP status. Connect/read timeouts come from {@link
+ * RelayAuthenticatorProperties}.
  *
  * <p><b>Claim-filtering contract:</b> this client sends <em>exactly</em> the claim list it is given.
  * Reducing the eSignet-accepted claims to {@code intersection(accepted, profile/config-declared)} —
@@ -50,6 +51,7 @@ public class RelayAttributeReleaseClient {
   private final HttpClient httpClient;
   private final ObjectMapper objectMapper;
   private final Duration readTimeout;
+  private final RelayBearerTokenFile bearerTokenFile;
 
   /**
    * Builds a client with an {@link HttpClient} configured from the connect timeout in {@code
@@ -79,6 +81,8 @@ public class RelayAttributeReleaseClient {
     this.httpClient = httpClient;
     this.objectMapper = objectMapper;
     this.readTimeout = Duration.ofMillis(properties.getRelay().getReadTimeoutMs());
+    this.bearerTokenFile =
+        new RelayBearerTokenFile(properties.getRelay().getAuth().getBearerTokenFile());
   }
 
   /**
@@ -95,13 +99,21 @@ public class RelayAttributeReleaseClient {
       throws RelayReleaseException {
     URI uri = buildUri();
     String body = buildRequestBody(subjectValue, claims);
+    String bearerToken;
+    try {
+      bearerToken = bearerTokenFile.read();
+    } catch (RelayBearerTokenFile.CredentialException e) {
+      log.warn("Relay bearer credential is unavailable or invalid; failing closed");
+      // Do not retain the credential exception as a cause. Even though it is sanitized today, this
+      // keeps future filesystem implementation details out of exceptions that cross this boundary.
+      throw new RelayReleaseException(RelayReleaseError.UNAVAILABLE, null, null);
+    }
 
     HttpRequest.Builder requestBuilder =
         HttpRequest.newBuilder()
             .uri(uri)
             .timeout(readTimeout)
-            .header(
-                HDR_AUTHORIZATION, "Bearer " + properties.getRelay().getAuth().getBearerToken())
+            .header(HDR_AUTHORIZATION, "Bearer " + bearerToken)
             .header(HDR_CONTENT_TYPE, CONTENT_TYPE_JSON)
             .header(HDR_ACCEPT, properties.getRelay().getAttributeRelease().getAccept())
             .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
