@@ -1,5 +1,9 @@
 package io.registry.esignet.relay;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -8,7 +12,20 @@ import java.util.List;
  */
 public final class TestProperties {
 
+  private static final Path RELAY_TOKEN_FILE = createRelayTokenFile();
+
   private TestProperties() {}
+
+  private static Path createRelayTokenFile() {
+    try {
+      Path path = Files.createTempFile("esignet-relay-authenticator-test-", ".token");
+      Files.writeString(path, "relay-test-token", StandardCharsets.UTF_8);
+      path.toFile().deleteOnExit();
+      return path;
+    } catch (IOException e) {
+      throw new ExceptionInInitializerError(e);
+    }
+  }
 
   /** A complete, valid configuration that passes {@link RelayAuthenticatorProperties#validate()}. */
   public static RelayAuthenticatorProperties valid() {
@@ -30,8 +47,7 @@ public final class TestProperties {
         List.of("individual_id", "name", "given_name", "family_name", "birthdate"));
     relay.setConnectTimeoutMs(2000);
     relay.setReadTimeoutMs(5000);
-    relay.getAuth().setCredentialKind("api_key");
-    relay.getAuth().setBearerToken("relay-test-token");
+    relay.getAuth().setBearerTokenFile(RELAY_TOKEN_FILE.toString());
 
     RelayAuthenticatorProperties.Esignet esignet = props.getEsignet();
     esignet.getAuth().setSupportedFactors(List.of("OTP"));

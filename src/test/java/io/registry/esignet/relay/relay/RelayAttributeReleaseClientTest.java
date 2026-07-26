@@ -10,11 +10,20 @@ import io.registry.esignet.relay.TestProperties;
 import io.registry.esignet.relay.relay.RelayStubServer.CapturedRequest;
 import io.registry.esignet.relay.relay.RelayStubServer.StubResponse;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /** M2: contract tests for the Relay attribute-release client against the JDK HttpServer stub. */
 class RelayAttributeReleaseClientTest {
@@ -22,6 +31,9 @@ class RelayAttributeReleaseClientTest {
   private RelayStubServer stub;
   private RelayAuthenticatorProperties props;
   private RelayAttributeReleaseClient client;
+  private Path tokenFile;
+
+  @TempDir Path tempDir;
 
   @BeforeEach
   void setUp() throws IOException {
@@ -30,6 +42,9 @@ class RelayAttributeReleaseClientTest {
     props.getRelay().setBaseUrl(stub.baseUrl());
     props.getRelay().setConnectTimeoutMs(2000);
     props.getRelay().setReadTimeoutMs(1000);
+    tokenFile = tempDir.resolve("relay-token");
+    Files.writeString(tokenFile, "relay-test-token", StandardCharsets.UTF_8);
+    props.getRelay().getAuth().setBearerTokenFile(tokenFile.toString());
     props.validate();
     client = new RelayAttributeReleaseClient(props);
   }
@@ -78,6 +93,101 @@ class RelayAttributeReleaseClientTest {
         req.headers.get("Data-Purpose"));
     assertEquals("application/json", req.headers.get("Accept"));
     assertEquals("application/json", req.headers.get("Content-Type"));
+  }
+
+  @Test
+  void reloadsBearerTokenAfterAtomicFileReplacement() throws Exception {
+    stub.setNextResponse(StubResponse.json(200, RelayStubServer.SUCCESS_BODY));
+
+    client.release("NID-2001", List.of("individual_id"));
+    assertEquals("Bearer relay-test-token", stub.lastRequest().headers.get("Authorization"));
+
+    Path replacement = tempDir.resolve("relay-token.next");
+    Files.writeString(replacement, "rotated-token_2", StandardCharsets.UTF_8);
+    Files.move(
+        replacement,
+        tokenFile,
+        StandardCopyOption.ATOMIC_MOVE,
+        StandardCopyOption.REPLACE_EXISTING);
+    client.release("NID-2001", List.of("individual_id"));
+
+    assertEquals(2, stub.requests().size());
+    assertEquals("Bearer rotated-token_2", stub.lastRequest().headers.get("Authorization"));
+  }
+
+  @Test
+  void acceptsOneConventionalTrailingLineEnding() throws Exception {
+    Files.writeString(tokenFile, "line-terminated-token\r\n", StandardCharsets.UTF_8);
+    stub.setNextResponse(StubResponse.json(200, RelayStubServer.SUCCESS_BODY));
+
+    client.release("NID-2001", List.of("individual_id"));
+
+    assertEquals("Bearer line-terminated-token", stub.lastRequest().headers.get("Authorization"));
+  }
+
+  @Test
+  void missingBearerTokenFileFailsClosedWithoutSending() throws Exception {
+    Files.delete(tokenFile);
+    assertCredentialRejectedWithoutSending(tokenFile.toString());
+  }
+
+  @Test
+  void nonRegularBearerTokenFileFailsClosedWithoutSending() throws Exception {
+    Path directory = tempDir.resolve("token-directory");
+    Files.createDirectory(directory);
+    props.getRelay().getAuth().setBearerTokenFile(directory.toString());
+    client = new RelayAttributeReleaseClient(props);
+
+    assertCredentialRejectedWithoutSending(directory.toString());
+  }
+
+  @Test
+  void unreadableBearerTokenFileFailsClosedWithoutSending() throws Exception {
+    Assumptions.assumeTrue(
+        Files.getFileAttributeView(tokenFile, PosixFileAttributeView.class) != null,
+        "test requires POSIX file permissions");
+    Set<PosixFilePermission> original = Files.getPosixFilePermissions(tokenFile);
+    try {
+      Files.setPosixFilePermissions(tokenFile, Set.of());
+      Assumptions.assumeFalse(
+          Files.isReadable(tokenFile), "filesystem or test user still permits reading mode 000");
+      assertCredentialRejectedWithoutSending(tokenFile.toString());
+    } finally {
+      Files.setPosixFilePermissions(tokenFile, original);
+    }
+  }
+
+  @Test
+  void emptyBearerTokenFileFailsClosedWithoutSending() throws Exception {
+    Files.write(tokenFile, new byte[0]);
+    assertCredentialRejectedWithoutSending("");
+  }
+
+  @Test
+  void malformedBearerTokenFailsClosedWithoutLeakingContent() throws Exception {
+    String malformed = "not a bearer token";
+    Files.writeString(tokenFile, malformed, StandardCharsets.UTF_8);
+    assertCredentialRejectedWithoutSending(malformed);
+  }
+
+  @Test
+  void multilineBearerTokenFailsClosedWithoutLeakingContent() throws Exception {
+    String malformed = "first-token\nsecond-token";
+    Files.writeString(tokenFile, malformed, StandardCharsets.UTF_8);
+    assertCredentialRejectedWithoutSending(malformed);
+  }
+
+  @Test
+  void invalidUtf8BearerTokenFailsClosedWithoutSending() throws Exception {
+    Files.write(tokenFile, new byte[] {(byte) 0xc3, (byte) 0x28});
+    assertCredentialRejectedWithoutSending(tokenFile.toString());
+  }
+
+  @Test
+  void oversizedBearerTokenFileFailsClosedWithoutSending() throws Exception {
+    Files.writeString(
+        tokenFile, "a".repeat(RelayBearerTokenFile.MAX_TOKEN_BYTES + 1), StandardCharsets.UTF_8);
+    assertCredentialRejectedWithoutSending(tokenFile.toString());
   }
 
   @Test
@@ -251,6 +361,20 @@ class RelayAttributeReleaseClientTest {
     RelayReleaseException ex =
         assertThrowsRelease(() -> client.release("NID-2001", List.of("individual_id")));
     assertEquals(expected, ex.getError(), "code-driven mapping, not status-driven");
+  }
+
+  private void assertCredentialRejectedWithoutSending(String forbiddenText) {
+    RelayReleaseException ex =
+        assertThrowsRelease(() -> client.release("NID-2001", List.of("individual_id")));
+    assertEquals(RelayReleaseError.UNAVAILABLE, ex.getError());
+    assertNull(ex.getWireCode());
+    assertNull(ex.getCause(), "filesystem failures must not be retained on the public exception");
+    if (!forbiddenText.isEmpty()) {
+      assertFalse(
+          String.valueOf(ex.getMessage()).contains(forbiddenText),
+          "failure must not expose the credential path or content");
+    }
+    assertTrue(stub.requests().isEmpty(), "invalid credentials must fail before an HTTP request");
   }
 
   private static String problem(String code) {

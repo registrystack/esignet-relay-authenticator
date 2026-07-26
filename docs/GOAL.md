@@ -1,6 +1,6 @@
 # Goal: eSignet Relay Authenticator plugin (v1)
 
-Status: complete — M0–M8 delivered; `mvn -B verify` green (125 tests), plugin JAR builds.
+Status: complete. M0-M8 delivered; `mvn -B verify` green (147 tests), plugin JAR builds.
 Owner: implementer working on branch `claude/admiring-brahmagupta-sw2n04`
 Drives: full implementation of this repository
 
@@ -41,7 +41,7 @@ The work is complete when all of the following hold:
   closed.
 - README and `docs/esignet-configuration.md` explain build, eSignet wiring,
   required secrets, static-OTP-is-not-production, and known limitations.
-- The PR names any remaining smoke test that needs `registry-lab` or a running
+- The PR names any remaining smoke test that needs `solmara-lab` or a running
   eSignet.
 
 (Full DoD detail: see the spec's "Definition of done".)
@@ -82,7 +82,7 @@ pushed to `claude/admiring-brahmagupta-sw2n04`.
   "not implemented"), GitHub Actions workflow running `mvn -B verify`. Test:
   context/bean-loading conditional property. Gate: compiles, `mvn test` green.
 - **M1 — Config + validation.** `RelayAuthenticatorProperties` typed config,
-  fail-fast on missing Relay token / HMAC secrets / keystore settings, secret
+  fail-fast on missing Relay token file / HMAC secrets / keystore settings, secret
   redaction in `toString`/logging. Tests: validation success/failure, redaction.
 - **M2 — Relay client + stub.** Build request (Bearer, `Data-Purpose`, claim
   filtering, profile/version path), parse success, map errors to internal codes
@@ -134,5 +134,5 @@ pushed to `claude/admiring-brahmagupta-sw2n04`.
 
 - Develop on `claude/admiring-brahmagupta-sw2n04`; extend PR #1.
 - Conventional, focused commits per milestone; keep the build green.
-- Do not touch `registry-relay`, `registry-lab`, `registry-internal`, or MOSIP
+- Do not touch `registry-relay`, `solmara-lab`, `registry-internal`, or MOSIP
   repos.

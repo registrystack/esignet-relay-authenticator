@@ -3,6 +3,8 @@ package io.registry.esignet.relay;
 import jakarta.annotation.PostConstruct;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -28,10 +30,10 @@ import org.springframework.stereotype.Component;
  * {@link #validate()} never runs — the plugin stays fully dormant rather than rejecting an unrelated
  * eSignet configuration at startup.
  *
- * <p>Security-sensitive fields (Relay bearer token, KYC-token and PSUT HMAC secrets, keystore
+ * <p>Security-sensitive fields (Relay bearer-token file, KYC-token and PSUT HMAC secrets, keystore
  * passwords) are validated fail-fast by {@link #validate()} and are redacted from {@link #toString()}
- * and all logging. The token is ALWAYS transmitted as {@code Authorization: Bearer}; {@code
- * registry.relay.auth.credential-kind} is an operator label only and has no effect on the wire.
+ * and all logging. The current Relay token is read from its file for every request and is always
+ * transmitted as {@code Authorization: Bearer}.
  */
 @Component
 @ConfigurationProperties(prefix = "registry")
@@ -116,9 +118,11 @@ public class RelayAuthenticatorProperties {
       problems.add("registry.relay.read-timeout-ms must be a positive number of milliseconds");
     }
 
-    // --- Security-sensitive: Relay bearer token (always Bearer on the wire) ---
-    if (isBlank(relay.auth.bearerToken)) {
-      problems.add("registry.relay.auth.bearer-token must be set (sent as Authorization: Bearer)");
+    // --- Security-sensitive: reloadable Relay bearer token (always Bearer on the wire) ---
+    if (isBlank(relay.auth.bearerTokenFile)) {
+      problems.add("registry.relay.auth.bearer-token-file must be set");
+    } else if (!isAbsolutePath(relay.auth.bearerTokenFile)) {
+      problems.add("registry.relay.auth.bearer-token-file must be an absolute path");
     }
 
     // --- Security-sensitive: internal HMAC secrets ---
@@ -188,6 +192,14 @@ public class RelayAuthenticatorProperties {
     return s == null || s.isBlank();
   }
 
+  private static boolean isAbsolutePath(String value) {
+    try {
+      return Path.of(value).isAbsolute();
+    } catch (InvalidPathException e) {
+      return false;
+    }
+  }
+
   private static boolean isAbsoluteHttpUrl(String value) {
     try {
       URI uri = new URI(value.trim());
@@ -246,7 +258,7 @@ public class RelayAuthenticatorProperties {
   }
 
   /**
-   * Redacted view. Never prints the bearer token, HMAC secrets, or keystore passwords.
+   * Redacted view. Never prints the bearer-token file path, HMAC secrets, or keystore passwords.
    *
    * @return a log-safe description of the configuration
    */
@@ -427,37 +439,22 @@ public class RelayAuthenticatorProperties {
       }
     }
 
-    /**
-     * {@code registry.relay.auth.*} group. {@code credentialKind} is a free-text operator label only
-     * (for example {@code api_key} or {@code oidc_access_token}); the token is always sent as {@code
-     * Authorization: Bearer} regardless of its value.
-     */
+    /** {@code registry.relay.auth.*} group. */
     public static class Auth {
-      private String credentialKind = "api_key";
-      private String bearerToken;
+      private String bearerTokenFile;
 
-      public String getCredentialKind() {
-        return credentialKind;
+      public String getBearerTokenFile() {
+        return bearerTokenFile;
       }
 
-      public void setCredentialKind(String credentialKind) {
-        this.credentialKind = credentialKind;
-      }
-
-      public String getBearerToken() {
-        return bearerToken;
-      }
-
-      public void setBearerToken(String bearerToken) {
-        this.bearerToken = bearerToken;
+      public void setBearerTokenFile(String bearerTokenFile) {
+        this.bearerTokenFile = bearerTokenFile;
       }
 
       @Override
       public String toString() {
-        return "Auth{credentialKind="
-            + credentialKind
-            + ", bearerToken="
-            + (bearerToken == null ? "null" : REDACTED)
+        return "Auth{bearerTokenFile="
+            + (bearerTokenFile == null ? "null" : REDACTED)
             + "}";
       }
     }

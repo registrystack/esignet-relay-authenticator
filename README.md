@@ -75,7 +75,7 @@ The artifact is `target/esignet-relay-authenticator-<version>.jar`.
 
 Tagging a release (`v*`) publishes that JAR as a GitHub Release asset
 (`.github/workflows/release.yml`) so downstream deployments can consume a pinned
-version — see [`docs/registry-lab-deployment.md`](docs/registry-lab-deployment.md).
+version. See [`docs/solmara-lab-deployment.md`](docs/solmara-lab-deployment.md).
 
 ## Run the tests
 
@@ -87,7 +87,7 @@ Tests are fully self-contained — they use a JDK `com.sun.net.httpserver`-based
 Relay stub (`RelayStubServer`) that follows
 [`docs/relay-attribute-release-contract.md`](docs/relay-attribute-release-contract.md),
 and generate in-memory test-only signing keys. **No running eSignet, Relay,
-`registry-lab`, or network access is required.**
+Solmara Lab, or network access is required.**
 
 ---
 
@@ -117,8 +117,7 @@ registry.relay.base-url=http://registry-relay:8080
 registry.relay.attribute-release.profile-id=esignet-civil-userinfo
 registry.relay.attribute-release.profile-version=v1
 registry.relay.attribute-release.purpose=https://demo.example.gov/purpose/esignet-identity-verification
-registry.relay.auth.credential-kind=api_key
-registry.relay.auth.bearer-token=${REGISTRY_RELAY_TOKEN}
+registry.relay.auth.bearer-token-file=${REGISTRY_RELAY_AUTH_BEARER_TOKEN_FILE}
 
 registry.esignet.auth.supported-factors=OTP
 # ⚠ LOCAL DEMO ONLY — see "Static OTP" below. Do NOT enable in production.
@@ -142,9 +141,9 @@ The plugin expects the governed attribute-release endpoint described in
 (the source of truth for the Relay client and its test stub). In summary:
 
 - **Endpoint:** `POST /v1/attribute-releases/{profile_id}/versions/{version}/resolve`
-- **Authorization:** always `Authorization: Bearer <token>` (both API-key and
-  OIDC credential kinds are carried as a bearer token; there is **no**
-  `X-API-Key` header path).
+- **Authorization:** always `Authorization: Bearer <token>`. The current token is
+  read from the configured secret file immediately before each request. There is
+  **no** `X-API-Key` header path.
 - **Request body:** `{ "subject": { "id_type": "...", "value": ... } }` with an
   optional `"claims": [...]`. The body is strict (`deny_unknown_fields`); the
   plugin **omits** the `claims` field entirely when its computed list is empty
@@ -178,7 +177,7 @@ fails; the signing key must be **RSA ≥ 2048 bits**.
 
 | Property | Env var (example) | Purpose |
 |---|---|---|
-| `registry.relay.auth.bearer-token` | `REGISTRY_RELAY_TOKEN` | Bearer credential for Relay |
+| `registry.relay.auth.bearer-token-file` | `REGISTRY_RELAY_AUTH_BEARER_TOKEN_FILE` | Absolute path to the mounted Relay bearer credential file |
 | `registry.esignet.kyc-token.hmac-secret` | `REGISTRY_ESIGNET_KYC_TOKEN_SECRET` | HS256 key for the internal KYC token (≥ 32 chars) |
 | `registry.esignet.psut.hmac-secret` | `REGISTRY_ESIGNET_PSUT_SECRET` | HMAC key for PSUT derivation (must differ from the KYC token secret; ≥ 32 chars) |
 | `registry.esignet.kyc.signing.keystore-path` | `REGISTRY_ESIGNET_KYC_KEYSTORE_PATH` | Path to the RSA signing keystore (PKCS12/JKS, RSA ≥ 2048-bit) |
@@ -189,6 +188,13 @@ fails; the signing key must be **RSA ≥ 2048 bits**.
 No private keys or keystores are committed. See
 [`docs/esignet-configuration.md`](docs/esignet-configuration.md) for generating
 a signing keystore.
+
+The Relay credential file must be an absolute-path regular file no larger than
+16 KiB. Its UTF-8 content must be one RFC 6750 bearer token, with an optional
+single trailing LF or CRLF. Empty, malformed, oversized, missing, and unreadable
+files fail closed before any Relay request is sent. Replace the file atomically
+to rotate the token. The next request reads the replacement; the plugin never
+caches the credential.
 
 ---
 
@@ -260,9 +266,9 @@ Stable internal codes selected from the Relay RFC 9457 `code` (full table in the
   verification and the release scope.
 - **Integration smoke test.** This repository's tests are self-contained. An
   end-to-end smoke test against a running eSignet + a live Relay
-  (e.g. via `registry-lab`) is **not** included here and remains a follow-up.
-  See [`docs/registry-lab-deployment.md`](docs/registry-lab-deployment.md) for
-  how to wire the plugin into the lab.
+  (for example, via Solmara Lab) is **not** included here and remains a follow-up.
+  See [`docs/solmara-lab-deployment.md`](docs/solmara-lab-deployment.md) for
+  how to wire the plugin into Solmara Lab.
 
 ---
 
@@ -270,8 +276,8 @@ Stable internal codes selected from the Relay RFC 9457 `code` (full table in the
 
 - [`docs/esignet-configuration.md`](docs/esignet-configuration.md) — full
   property reference, keystore setup, and `esignet-with-plugins` packaging.
-- [`docs/registry-lab-deployment.md`](docs/registry-lab-deployment.md) — how to
-  deploy the plugin JAR into the `registry-lab` stack for end-to-end testing.
+- [`docs/solmara-lab-deployment.md`](docs/solmara-lab-deployment.md) describes how
+  to deploy the plugin JAR into Solmara Lab for end-to-end testing.
 - [`docs/relay-attribute-release-contract.md`](docs/relay-attribute-release-contract.md)
   — the Relay wire contract used by the client and its test stub.
 - [`docs/esignet-relay-authenticator-plugin-spec.md`](docs/esignet-relay-authenticator-plugin-spec.md)
