@@ -1,10 +1,9 @@
 package io.registry.esignet.relay;
 
 import jakarta.annotation.PostConstruct;
+import io.registry.esignet.relay.mint.MintClientAssertionSigner;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.nio.file.InvalidPathException;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -20,9 +19,8 @@ import org.springframework.stereotype.Component;
 /**
  * Typed configuration for the eSignet Relay Authenticator plugin.
  *
- * <p>Binds the {@code registry.relay.*} and {@code registry.esignet.*} property surface documented
- * in the plugin spec. Bound via Spring {@link ConfigurationProperties} (Spring is a provided
- * dependency at eSignet runtime). Groups are modelled as nested static classes.
+ * <p>Binds the {@code registry.relay.*}, {@code registry.mint.*}, and {@code registry.esignet.*}
+ * property surface documented in the plugin spec.
  *
  * <p>Gated by the same {@link ConditionalOnProperty} as the authenticator and its collaborator graph
  * ({@code mosip.esignet.integration.authenticator=RelayAuthenticationService}), so in a deployment
@@ -30,10 +28,8 @@ import org.springframework.stereotype.Component;
  * {@link #validate()} never runs — the plugin stays fully dormant rather than rejecting an unrelated
  * eSignet configuration at startup.
  *
- * <p>Security-sensitive fields (Relay bearer-token file, KYC-token and PSUT HMAC secrets, keystore
- * passwords) are validated fail-fast by {@link #validate()} and are redacted from {@link #toString()}
- * and all logging. The current Relay token is read from its file for every request and is always
- * transmitted as {@code Authorization: Bearer}.
+ * <p>Security-sensitive fields (the Mint client private JWK, KYC-token and PSUT HMAC secrets, and
+ * keystore passwords) are validated fail-fast and redacted from {@link #toString()} and all logging.
  */
 @Component
 @ConfigurationProperties(prefix = "registry")
@@ -55,6 +51,7 @@ public class RelayAuthenticatorProperties {
   private static final Logger log = LoggerFactory.getLogger(RelayAuthenticatorProperties.class);
 
   private Relay relay = new Relay();
+  private Mint mint = new Mint();
   private Esignet esignet = new Esignet();
 
   /**
@@ -78,37 +75,20 @@ public class RelayAuthenticatorProperties {
       warnIfPlaintextNonLoopback(relay.baseUrl);
     }
 
-    Relay.AttributeRelease ar = relay.attributeRelease;
-    if (isBlank(ar.profileId)) {
-      problems.add("registry.relay.attribute-release.profile-id must be set");
+    if (isBlank(relay.resource)) {
+      problems.add("registry.relay.resource must be set");
     }
-    if (isBlank(ar.profileVersion)) {
-      problems.add("registry.relay.attribute-release.profile-version must be set");
+    if (isBlank(relay.lookup)) {
+      problems.add("registry.relay.lookup must be set");
     }
-    if (isBlank(ar.pathTemplate)) {
-      problems.add("registry.relay.attribute-release.path-template must be set");
-    } else {
-      if (!ar.pathTemplate.contains("{profile_id}")) {
-        problems.add("registry.relay.attribute-release.path-template must contain {profile_id}");
-      }
-      if (!ar.pathTemplate.contains("{version}")) {
-        problems.add("registry.relay.attribute-release.path-template must contain {version}");
-      }
+    if (isBlank(relay.accept)) {
+      problems.add("registry.relay.accept must be set");
     }
-    if (isBlank(ar.accept)) {
-      problems.add("registry.relay.attribute-release.accept must be set");
-    }
-    // The governed attribute-release profile this plugin targets requires a purpose: Relay rejects a
-    // request with no Data-Purpose (auth.purpose_required). Require it fail-fast so a blank value
-    // cannot lead the client to silently omit the header and turn every release into a 400.
-    if (isBlank(ar.purpose)) {
-      problems.add(
-          "registry.relay.attribute-release.purpose must be set"
-              + " (sent as the Data-Purpose header; required by the governed profile)");
-    }
-
-    if (isBlank(relay.subject.idType)) {
-      problems.add("registry.relay.subject.id-type must be set");
+    if (relay.defaultClaims == null || relay.defaultClaims.isEmpty()) {
+      problems.add("registry.relay.default-claims must name the provisioned Relay properties");
+    } else if (relay.defaultClaims.stream()
+        .anyMatch(RelayAuthenticatorProperties::invalidFieldName)) {
+      problems.add("registry.relay.default-claims contains an invalid Relay property name");
     }
 
     if (relay.connectTimeoutMs <= 0) {
@@ -118,11 +98,49 @@ public class RelayAuthenticatorProperties {
       problems.add("registry.relay.read-timeout-ms must be a positive number of milliseconds");
     }
 
-    // --- Security-sensitive: reloadable Relay bearer token (always Bearer on the wire) ---
-    if (isBlank(relay.auth.bearerTokenFile)) {
-      problems.add("registry.relay.auth.bearer-token-file must be set");
-    } else if (!isAbsolutePath(relay.auth.bearerTokenFile)) {
-      problems.add("registry.relay.auth.bearer-token-file must be an absolute path");
+    // --- Registry Mint private-key-JWT client credentials ---
+    if (isBlank(mint.tokenEndpoint)) {
+      problems.add("registry.mint.token-endpoint must be set");
+    } else if (!isAbsoluteHttpUrl(mint.tokenEndpoint)) {
+      problems.add("registry.mint.token-endpoint must be a valid absolute http(s) URL");
+    } else {
+      warnIfPlaintextNonLoopback(mint.tokenEndpoint);
+    }
+    if (isBlank(mint.clientId)) {
+      problems.add("registry.mint.client-id must be set");
+    }
+    if (isBlank(mint.privateJwk)) {
+      problems.add("registry.mint.private-jwk must be set");
+    } else {
+      try {
+        MintClientAssertionSigner.validatePrivateJwk(mint.privateJwk);
+      } catch (IllegalArgumentException e) {
+        problems.add("registry.mint.private-jwk must be a valid private RS256 JWK with kid");
+      }
+    }
+    if (mint.assertionLifetimeSeconds < 1 || mint.assertionLifetimeSeconds > 300) {
+      problems.add("registry.mint.assertion-lifetime-seconds must be between 1 and 300");
+    }
+    if (mint.tokenCacheMaxSeconds < 1 || mint.tokenCacheMaxSeconds > 3600) {
+      problems.add("registry.mint.token-cache-max-seconds must be between 1 and 3600");
+    }
+    if (mint.connectTimeoutMs <= 0) {
+      problems.add("registry.mint.connect-timeout-ms must be positive");
+    }
+    if (mint.readTimeoutMs <= 0) {
+      problems.add("registry.mint.read-timeout-ms must be positive");
+    }
+
+    if (isBlank(esignet.subjectIdType)) {
+      problems.add("registry.esignet.subject-id-type must be set");
+    }
+    if (esignet.accountCheckClaims == null
+        || esignet.accountCheckClaims.isEmpty()
+        || esignet.accountCheckClaims.stream()
+            .anyMatch(claim -> !relay.defaultClaims.contains(claim))) {
+      problems.add(
+          "registry.esignet.account-check-claims must be a non-empty subset of"
+              + " registry.relay.default-claims");
     }
 
     // --- Security-sensitive: internal HMAC secrets ---
@@ -192,12 +210,8 @@ public class RelayAuthenticatorProperties {
     return s == null || s.isBlank();
   }
 
-  private static boolean isAbsolutePath(String value) {
-    try {
-      return Path.of(value).isAbsolute();
-    } catch (InvalidPathException e) {
-      return false;
-    }
+  private static boolean invalidFieldName(String value) {
+    return isBlank(value) || !value.matches("[A-Za-z][A-Za-z0-9_.-]*");
   }
 
   private static boolean isAbsoluteHttpUrl(String value) {
@@ -222,11 +236,7 @@ public class RelayAuthenticatorProperties {
     try {
       URI uri = new URI(baseUrl.trim());
       if ("http".equalsIgnoreCase(uri.getScheme()) && !isLoopbackHost(uri.getHost())) {
-        log.warn(
-            "registry.relay.base-url uses plaintext http to non-loopback host '{}'; the Relay"
-                + " bearer token and subject identifiers will be sent unencrypted. Use https in"
-                + " production.",
-            uri.getHost());
+        log.warn("A Registry service endpoint uses plaintext http; production requires https");
       }
     } catch (URISyntaxException e) {
       // Already validated as an absolute http(s) URL above; nothing to warn about.
@@ -249,6 +259,14 @@ public class RelayAuthenticatorProperties {
     this.relay = relay;
   }
 
+  public Mint getMint() {
+    return mint;
+  }
+
+  public void setMint(Mint mint) {
+    this.mint = mint;
+  }
+
   public Esignet getEsignet() {
     return esignet;
   }
@@ -258,13 +276,19 @@ public class RelayAuthenticatorProperties {
   }
 
   /**
-   * Redacted view. Never prints the bearer-token file path, HMAC secrets, or keystore passwords.
+   * Redacted view. Never prints private key material, HMAC secrets, or keystore passwords.
    *
    * @return a log-safe description of the configuration
    */
   @Override
   public String toString() {
-    return "RelayAuthenticatorProperties{relay=" + relay + ", esignet=" + esignet + "}";
+    return "RelayAuthenticatorProperties{relay="
+        + relay
+        + ", mint="
+        + mint
+        + ", esignet="
+        + esignet
+        + "}";
   }
 
   // ---------------------------------------------------------------------------
@@ -274,12 +298,13 @@ public class RelayAuthenticatorProperties {
   /** {@code registry.relay.*} group. */
   public static class Relay {
     private String baseUrl;
-    private AttributeRelease attributeRelease = new AttributeRelease();
-    private Subject subject = new Subject();
+    private String resource;
+    private String lookup;
+    private String accessProfile;
+    private String accept = "application/json";
     private List<String> defaultClaims = Collections.emptyList();
     private int connectTimeoutMs = 2000;
     private int readTimeoutMs = 5000;
-    private Auth auth = new Auth();
 
     public String getBaseUrl() {
       return baseUrl;
@@ -289,20 +314,36 @@ public class RelayAuthenticatorProperties {
       this.baseUrl = baseUrl;
     }
 
-    public AttributeRelease getAttributeRelease() {
-      return attributeRelease;
+    public String getResource() {
+      return resource;
     }
 
-    public void setAttributeRelease(AttributeRelease attributeRelease) {
-      this.attributeRelease = attributeRelease;
+    public void setResource(String resource) {
+      this.resource = resource;
     }
 
-    public Subject getSubject() {
-      return subject;
+    public String getLookup() {
+      return lookup;
     }
 
-    public void setSubject(Subject subject) {
-      this.subject = subject;
+    public void setLookup(String lookup) {
+      this.lookup = lookup;
+    }
+
+    public String getAccessProfile() {
+      return accessProfile;
+    }
+
+    public void setAccessProfile(String accessProfile) {
+      this.accessProfile = accessProfile;
+    }
+
+    public String getAccept() {
+      return accept;
+    }
+
+    public void setAccept(String accept) {
+      this.accept = accept;
     }
 
     public List<String> getDefaultClaims() {
@@ -329,134 +370,111 @@ public class RelayAuthenticatorProperties {
       this.readTimeoutMs = readTimeoutMs;
     }
 
-    public Auth getAuth() {
-      return auth;
-    }
-
-    public void setAuth(Auth auth) {
-      this.auth = auth;
-    }
-
     @Override
     public String toString() {
       return "Relay{baseUrl="
           + baseUrl
-          + ", attributeRelease="
-          + attributeRelease
-          + ", subject="
-          + subject
+          + ", resource="
+          + resource
+          + ", lookup="
+          + lookup
+          + ", accessProfile="
+          + accessProfile
+          + ", accept="
+          + accept
           + ", defaultClaims="
           + defaultClaims
           + ", connectTimeoutMs="
           + connectTimeoutMs
           + ", readTimeoutMs="
           + readTimeoutMs
-          + ", auth="
-          + auth
           + "}";
     }
+  }
 
-    /** {@code registry.relay.attribute-release.*} group. */
-    public static class AttributeRelease {
-      private String profileId;
-      private String profileVersion;
-      private String pathTemplate =
-          "/v1/attribute-releases/{profile_id}/versions/{version}/resolve";
-      private String purpose;
-      private String accept = "application/json";
+  /** {@code registry.mint.*} OAuth client-credentials group. */
+  public static class Mint {
+    private String tokenEndpoint;
+    private String clientId;
+    private String privateJwk;
+    private int assertionLifetimeSeconds = 120;
+    private int tokenCacheMaxSeconds = 300;
+    private int connectTimeoutMs = 2000;
+    private int readTimeoutMs = 5000;
 
-      public String getProfileId() {
-        return profileId;
-      }
-
-      public void setProfileId(String profileId) {
-        this.profileId = profileId;
-      }
-
-      public String getProfileVersion() {
-        return profileVersion;
-      }
-
-      public void setProfileVersion(String profileVersion) {
-        this.profileVersion = profileVersion;
-      }
-
-      public String getPathTemplate() {
-        return pathTemplate;
-      }
-
-      public void setPathTemplate(String pathTemplate) {
-        this.pathTemplate = pathTemplate;
-      }
-
-      public String getPurpose() {
-        return purpose;
-      }
-
-      public void setPurpose(String purpose) {
-        this.purpose = purpose;
-      }
-
-      public String getAccept() {
-        return accept;
-      }
-
-      public void setAccept(String accept) {
-        this.accept = accept;
-      }
-
-      @Override
-      public String toString() {
-        return "AttributeRelease{profileId="
-            + profileId
-            + ", profileVersion="
-            + profileVersion
-            + ", pathTemplate="
-            + pathTemplate
-            + ", purpose="
-            + purpose
-            + ", accept="
-            + accept
-            + "}";
-      }
+    public String getTokenEndpoint() {
+      return tokenEndpoint;
     }
 
-    /** {@code registry.relay.subject.*} group. */
-    public static class Subject {
-      private String idType;
-
-      public String getIdType() {
-        return idType;
-      }
-
-      public void setIdType(String idType) {
-        this.idType = idType;
-      }
-
-      @Override
-      public String toString() {
-        return "Subject{idType=" + idType + "}";
-      }
+    public void setTokenEndpoint(String tokenEndpoint) {
+      this.tokenEndpoint = tokenEndpoint;
     }
 
-    /** {@code registry.relay.auth.*} group. */
-    public static class Auth {
-      private String bearerTokenFile;
+    public String getClientId() {
+      return clientId;
+    }
 
-      public String getBearerTokenFile() {
-        return bearerTokenFile;
-      }
+    public void setClientId(String clientId) {
+      this.clientId = clientId;
+    }
 
-      public void setBearerTokenFile(String bearerTokenFile) {
-        this.bearerTokenFile = bearerTokenFile;
-      }
+    public String getPrivateJwk() {
+      return privateJwk;
+    }
 
-      @Override
-      public String toString() {
-        return "Auth{bearerTokenFile="
-            + (bearerTokenFile == null ? "null" : REDACTED)
-            + "}";
-      }
+    public void setPrivateJwk(String privateJwk) {
+      this.privateJwk = privateJwk;
+    }
+
+    public int getAssertionLifetimeSeconds() {
+      return assertionLifetimeSeconds;
+    }
+
+    public void setAssertionLifetimeSeconds(int value) {
+      this.assertionLifetimeSeconds = value;
+    }
+
+    public int getTokenCacheMaxSeconds() {
+      return tokenCacheMaxSeconds;
+    }
+
+    public void setTokenCacheMaxSeconds(int value) {
+      this.tokenCacheMaxSeconds = value;
+    }
+
+    public int getConnectTimeoutMs() {
+      return connectTimeoutMs;
+    }
+
+    public void setConnectTimeoutMs(int value) {
+      this.connectTimeoutMs = value;
+    }
+
+    public int getReadTimeoutMs() {
+      return readTimeoutMs;
+    }
+
+    public void setReadTimeoutMs(int value) {
+      this.readTimeoutMs = value;
+    }
+
+    @Override
+    public String toString() {
+      return "Mint{tokenEndpoint="
+          + tokenEndpoint
+          + ", clientId="
+          + clientId
+          + ", privateJwk="
+          + (privateJwk == null ? "null" : REDACTED)
+          + ", assertionLifetimeSeconds="
+          + assertionLifetimeSeconds
+          + ", tokenCacheMaxSeconds="
+          + tokenCacheMaxSeconds
+          + ", connectTimeoutMs="
+          + connectTimeoutMs
+          + ", readTimeoutMs="
+          + readTimeoutMs
+          + "}";
     }
   }
 
@@ -470,6 +488,7 @@ public class RelayAuthenticatorProperties {
     private KycToken kycToken = new KycToken();
     private Psut psut = new Psut();
     private Kyc kyc = new Kyc();
+    private String subjectIdType = "uin";
 
     /**
      * Minimal claim list used as the account-check probe in {@code doKycAuth}. This proves the
@@ -503,6 +522,14 @@ public class RelayAuthenticatorProperties {
 
     public Auth getAuth() {
       return auth;
+    }
+
+    public String getSubjectIdType() {
+      return subjectIdType;
+    }
+
+    public void setSubjectIdType(String subjectIdType) {
+      this.subjectIdType = subjectIdType;
     }
 
     public void setAuth(Auth auth) {
@@ -558,6 +585,8 @@ public class RelayAuthenticatorProperties {
     public String toString() {
       return "Esignet{auth="
           + auth
+          + ", subjectIdType="
+          + subjectIdType
           + ", kycToken="
           + kycToken
           + ", psut="

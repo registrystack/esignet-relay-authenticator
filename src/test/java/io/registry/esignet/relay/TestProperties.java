@@ -1,10 +1,9 @@
 package io.registry.esignet.relay;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
+import java.security.KeyPairGenerator;
+import java.security.interfaces.RSAPrivateCrtKey;
+import java.util.Base64;
 
 /**
  * Builds fully-populated, valid {@link RelayAuthenticatorProperties} for tests. Individual tests
@@ -12,20 +11,7 @@ import java.util.List;
  */
 public final class TestProperties {
 
-  private static final Path RELAY_TOKEN_FILE = createRelayTokenFile();
-
   private TestProperties() {}
-
-  private static Path createRelayTokenFile() {
-    try {
-      Path path = Files.createTempFile("esignet-relay-authenticator-test-", ".token");
-      Files.writeString(path, "relay-test-token", StandardCharsets.UTF_8);
-      path.toFile().deleteOnExit();
-      return path;
-    } catch (IOException e) {
-      throw new ExceptionInInitializerError(e);
-    }
-  }
 
   /** A complete, valid configuration that passes {@link RelayAuthenticatorProperties#validate()}. */
   public static RelayAuthenticatorProperties valid() {
@@ -33,23 +19,26 @@ public final class TestProperties {
 
     RelayAuthenticatorProperties.Relay relay = props.getRelay();
     relay.setBaseUrl("http://registry-relay:8080");
-    relay.getAttributeRelease().setProfileId("esignet-civil-userinfo");
-    relay.getAttributeRelease().setProfileVersion("v1");
-    relay
-        .getAttributeRelease()
-        .setPathTemplate("/v1/attribute-releases/{profile_id}/versions/{version}/resolve");
-    relay
-        .getAttributeRelease()
-        .setPurpose("https://demo.example.gov/purpose/esignet-identity-verification");
-    relay.getAttributeRelease().setAccept("application/json");
-    relay.getSubject().setIdType("national_id");
+    relay.setResource("civil-person");
+    relay.setLookup("by-uin");
+    relay.setAccessProfile("esignet");
+    relay.setAccept("application/json");
     relay.setDefaultClaims(
         List.of("individual_id", "name", "given_name", "family_name", "birthdate"));
     relay.setConnectTimeoutMs(2000);
     relay.setReadTimeoutMs(5000);
-    relay.getAuth().setBearerTokenFile(RELAY_TOKEN_FILE.toString());
+
+    RelayAuthenticatorProperties.Mint mint = props.getMint();
+    mint.setTokenEndpoint("http://registry-mint:8080/token");
+    mint.setClientId("esignet-relay-authenticator");
+    mint.setPrivateJwk(TestRsaJwk.PRIVATE_JWK);
+    mint.setAssertionLifetimeSeconds(120);
+    mint.setTokenCacheMaxSeconds(300);
+    mint.setConnectTimeoutMs(2000);
+    mint.setReadTimeoutMs(1000);
 
     RelayAuthenticatorProperties.Esignet esignet = props.getEsignet();
+    esignet.setSubjectIdType("uin");
     esignet.getAuth().setSupportedFactors(List.of("OTP"));
     esignet.getAuth().getOtp().setChannels(List.of("email", "phone"));
     esignet.getAuth().getOtp().setMode("static");
@@ -68,5 +57,39 @@ public final class TestProperties {
     esignet.getKyc().getSigning().setKeyPassword("key-pass");
 
     return props;
+  }
+
+  public static String mintPrivateJwk() {
+    return TestRsaJwk.PRIVATE_JWK;
+  }
+
+  private static final class TestRsaJwk {
+    private static final String PRIVATE_JWK = generate();
+
+    private static String generate() {
+      try {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+        generator.initialize(2048);
+        RSAPrivateCrtKey key = (RSAPrivateCrtKey) generator.generateKeyPair().getPrivate();
+        return "{\"kty\":\"RSA\",\"alg\":\"RS256\",\"kid\":\"mint-client-test-key\""
+            + ",\"n\":\"" + encoded(key.getModulus()) + "\""
+            + ",\"e\":\"" + encoded(key.getPublicExponent()) + "\""
+            + ",\"d\":\"" + encoded(key.getPrivateExponent()) + "\""
+            + ",\"p\":\"" + encoded(key.getPrimeP()) + "\""
+            + ",\"q\":\"" + encoded(key.getPrimeQ()) + "\""
+            + ",\"dp\":\"" + encoded(key.getPrimeExponentP()) + "\""
+            + ",\"dq\":\"" + encoded(key.getPrimeExponentQ()) + "\""
+            + ",\"qi\":\"" + encoded(key.getCrtCoefficient()) + "\"}";
+      } catch (Exception e) {
+        throw new ExceptionInInitializerError(e);
+      }
+    }
+
+    private static String encoded(java.math.BigInteger value) {
+      byte[] bytes = value.toByteArray();
+      int offset = bytes.length > 1 && bytes[0] == 0 ? 1 : 0;
+      return Base64.getUrlEncoder().withoutPadding().encodeToString(
+          java.util.Arrays.copyOfRange(bytes, offset, bytes.length));
+    }
   }
 }

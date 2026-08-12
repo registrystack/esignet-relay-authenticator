@@ -21,32 +21,15 @@ class RelayAuthenticatorPropertiesTest {
   }
 
   @Test
-  void missingRelayBearerTokenFileFailsFast() {
+  void missingMintPrivateJwkFailsFast() {
     RelayAuthenticatorProperties props = TestProperties.valid();
-    props.getRelay().getAuth().setBearerTokenFile(null);
+    props.getMint().setPrivateJwk(null);
 
     RelayAuthenticatorConfigException ex =
         assertThrows(RelayAuthenticatorConfigException.class, props::validate);
     assertTrue(
-        ex.getProblems().stream()
-            .anyMatch(p -> p.contains("registry.relay.auth.bearer-token-file")),
-        "should report the missing Relay bearer-token file");
-  }
-
-  @Test
-  void relativeRelayBearerTokenFileFailsFast() {
-    RelayAuthenticatorProperties props = TestProperties.valid();
-    props.getRelay().getAuth().setBearerTokenFile("secrets/registry-relay-token");
-
-    RelayAuthenticatorConfigException ex =
-        assertThrows(RelayAuthenticatorConfigException.class, props::validate);
-    assertTrue(
-        ex.getProblems().stream()
-            .anyMatch(
-                p ->
-                    p.contains("registry.relay.auth.bearer-token-file")
-                        && p.contains("absolute")),
-        "should reject a relative Relay bearer-token path");
+        ex.getProblems().stream().anyMatch(p -> p.contains("registry.mint.private-jwk")),
+        "should report the missing Mint private JWK");
   }
 
   @Test
@@ -105,29 +88,29 @@ class RelayAuthenticatorPropertiesTest {
   }
 
   @Test
-  void missingPurposeFailsFast() {
+  void missingRelayResourceFailsFast() {
     RelayAuthenticatorProperties props = TestProperties.valid();
-    props.getRelay().getAttributeRelease().setPurpose(null);
+    props.getRelay().setResource(null);
 
     RelayAuthenticatorConfigException ex =
         assertThrows(RelayAuthenticatorConfigException.class, props::validate);
     assertTrue(
         ex.getProblems().stream()
-            .anyMatch(p -> p.contains("registry.relay.attribute-release.purpose")),
-        "should require the Data-Purpose value fail-fast");
+            .anyMatch(p -> p.contains("registry.relay.resource")),
+        "should require the Relay V2 resource");
   }
 
   @Test
-  void blankPurposeFailsFast() {
+  void missingRelayLookupFailsFast() {
     RelayAuthenticatorProperties props = TestProperties.valid();
-    props.getRelay().getAttributeRelease().setPurpose("   ");
+    props.getRelay().setLookup("   ");
 
     RelayAuthenticatorConfigException ex =
         assertThrows(RelayAuthenticatorConfigException.class, props::validate);
     assertTrue(
         ex.getProblems().stream()
-            .anyMatch(p -> p.contains("registry.relay.attribute-release.purpose")),
-        "a blank purpose must be rejected, not silently accepted (the client would omit the header)");
+            .anyMatch(p -> p.contains("registry.relay.lookup")),
+        "should require the Relay V2 lookup");
   }
 
   @Test
@@ -183,27 +166,23 @@ class RelayAuthenticatorPropertiesTest {
   }
 
   @Test
-  void pathTemplateMissingProfileIdRejected() {
+  void invalidMintPrivateJwkRejected() {
     RelayAuthenticatorProperties props = TestProperties.valid();
-    props.getRelay().getAttributeRelease().setPathTemplate("/v1/releases/versions/{version}");
+    props.getMint().setPrivateJwk("{\"kty\":\"oct\",\"k\":\"secret\"}");
 
     RelayAuthenticatorConfigException ex =
         assertThrows(RelayAuthenticatorConfigException.class, props::validate);
-    assertTrue(
-        ex.getProblems().stream().anyMatch(p -> p.contains("{profile_id}")),
-        "should require {profile_id} in the path template");
+    assertTrue(ex.getProblems().stream().anyMatch(p -> p.contains("registry.mint.private-jwk")));
   }
 
   @Test
-  void pathTemplateMissingVersionRejected() {
+  void assertionLifetimeAboveMintBoundRejected() {
     RelayAuthenticatorProperties props = TestProperties.valid();
-    props.getRelay().getAttributeRelease().setPathTemplate("/v1/releases/{profile_id}/resolve");
+    props.getMint().setAssertionLifetimeSeconds(301);
 
     RelayAuthenticatorConfigException ex =
         assertThrows(RelayAuthenticatorConfigException.class, props::validate);
-    assertTrue(
-        ex.getProblems().stream().anyMatch(p -> p.contains("{version}")),
-        "should require {version} in the path template");
+    assertTrue(ex.getProblems().stream().anyMatch(p -> p.contains("assertion-lifetime-seconds")));
   }
 
   @Test
@@ -240,12 +219,9 @@ class RelayAuthenticatorPropertiesTest {
   @Test
   void toStringRedactsAllSecrets() {
     RelayAuthenticatorProperties props = TestProperties.valid();
-    String bearerTokenFile = props.getRelay().getAuth().getBearerTokenFile();
     String rendered = props.toString();
 
-    assertFalse(
-        rendered.contains(bearerTokenFile),
-        "bearer-token file path must be redacted");
+    assertFalse(rendered.contains("\"d\":"), "Mint private JWK must be redacted");
     assertFalse(
         rendered.contains("kyc-token-hmac-secret-0123456789abcdef"),
         "KYC-token secret must be redacted");
@@ -256,13 +232,13 @@ class RelayAuthenticatorPropertiesTest {
     assertFalse(rendered.contains("111111"), "static OTP value must be redacted");
     assertTrue(rendered.contains(RelayAuthenticatorProperties.REDACTED), "should show redaction marker");
     // Non-secret fields remain visible for operability.
-    assertTrue(rendered.contains("esignet-civil-userinfo"), "non-secret profile id should be shown");
+    assertTrue(rendered.contains("civil-person"), "non-secret Relay resource should be shown");
   }
 
   @Test
   void multipleProblemsCollectedInOnePass() {
     RelayAuthenticatorProperties props = TestProperties.valid();
-    props.getRelay().getAuth().setBearerTokenFile(null);
+    props.getMint().setPrivateJwk(null);
     props.getEsignet().getKycToken().setHmacSecret(null);
     props.getEsignet().getPsut().setHmacSecret(null);
 

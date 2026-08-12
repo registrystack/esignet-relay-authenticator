@@ -19,11 +19,10 @@ import java.util.Set;
  *
  * <ol>
  *   <li><b>Request planning</b> ({@link #relayClaimsFor}): turn the eSignet-accepted claim names
- *       into the exact, profile-filtered Relay source list to request. Protocol-derived claims
+ *       into the exact, provisioned Relay property list to request. Protocol-derived claims
  *       (anything mapped to {@code $psut}, and {@code sub}) are dropped — they are populated locally,
- *       never requested. The result is intersected with the profile-declared claim set because
- *       Relay V1 denies the ENTIRE request if any requested claim is outside the profile, so
- *       optional-claim omission is the plugin's job.
+ *       never requested. The result is intersected with the configured provisioned property set so
+ *       Relay V2 {@code fields} can only narrow disclosure.
  *   <li><b>Response mapping</b> ({@link #toUserInfo}): turn Relay's released claim map plus the
  *       PSUT into the eSignet UserInfo claim map, preserving scalar JSON types and always supplying
  *       {@code sub} from the PSUT.
@@ -44,7 +43,7 @@ public class ClaimMapper {
   private final Set<String> profileClaims;
 
   /**
-   * @param properties validated plugin configuration (claim map + profile default claims)
+   * @param properties validated plugin configuration (claim map + provisioned Relay properties)
    */
   public ClaimMapper(RelayAuthenticatorProperties properties) {
     Objects.requireNonNull(properties, "properties");
@@ -65,13 +64,12 @@ public class ClaimMapper {
    * Plans the Relay source claims to request for the given eSignet-accepted claims.
    *
    * <p>For each accepted claim it resolves the Relay source via the claim map, drops protocol-derived
-   * entries ({@code sub} and any source equal to {@code $psut}), and keeps only sources the profile
-   * declares (Relay denies the whole request otherwise). The result is stable-ordered and
-   * de-duplicated, and MAY be empty — callers must then OMIT the {@code claims} array entirely per
-   * the Relay client contract.
+   * entries ({@code sub} and any source equal to {@code $psut}), and keeps only provisioned Relay
+   * properties. The result is stable-ordered and de-duplicated, and MAY be empty; callers then skip
+   * Relay so no default field set can be released.
    *
    * @param esignetAcceptedClaims the claims eSignet accepted/consented (may be {@code null}/empty)
-   * @return the de-duplicated, profile-filtered Relay source claim list (never {@code null})
+   * @return the de-duplicated, provisioned Relay property list (never {@code null})
    */
   public List<String> relayClaimsFor(Collection<String> esignetAcceptedClaims) {
     if (esignetAcceptedClaims == null || esignetAcceptedClaims.isEmpty()) {
@@ -88,7 +86,7 @@ public class ClaimMapper {
         // Unmapped claim, or a protocol-derived claim populated locally — do not request.
         continue;
       }
-      // Profile filter: Relay V1 denies the entire request if any claim is outside the profile.
+      // Provisioned-property filter: V2 fields may only narrow the selected access profile.
       if (profileClaims.contains(source)) {
         planned.add(source);
       }

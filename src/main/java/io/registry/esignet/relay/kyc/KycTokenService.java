@@ -271,7 +271,7 @@ public class KycTokenService {
     // 6. Expiry — checked before binding so we can give the right exception kind
     long nowSecs = clock.instant().getEpochSecond();
     if (exp <= nowSecs) {
-      log.warn("KYC token has expired (exp={}, now={})", exp, nowSecs);
+      log.warn("KYC token has expired");
       throw new KycTokenException(KycTokenException.Kind.TOKEN_EXPIRED, "token_expired");
     }
 

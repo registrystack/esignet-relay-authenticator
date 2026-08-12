@@ -177,7 +177,7 @@ public class KycSigningKeyService {
           "Signing RSA key must be at least " + MIN_RSA_KEY_BITS + " bits");
     }
     String kid = computeKid(rsaPublicKey);
-    log.info("KYC signing key loaded (kid={}, alg={})", kid, alg);
+    log.info("KYC signing key loaded");
     return new Material((RSAPrivateKey) loadedKey, cert, alg, kid);
   }
 
