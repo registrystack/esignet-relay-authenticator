@@ -46,7 +46,7 @@ public class RelayAuthenticatorConfiguration {
   }
 
   /**
-   * The Relay attribute-release HTTP client.
+   * The Relay V2 lookup HTTP client.
    *
    * @param properties validated plugin configuration
    * @return the Relay client

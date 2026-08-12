@@ -55,6 +55,7 @@ class RelayAuthenticationServiceKycAuthTest {
     stub = new RelayStubServer();
     props = TestProperties.valid();
     props.getRelay().setBaseUrl(stub.baseUrl());
+    props.getMint().setTokenEndpoint(stub.mintTokenEndpoint());
     props.getRelay().setConnectTimeoutMs(2000);
     props.getRelay().setReadTimeoutMs(1000);
     props.getEsignet().getAuth().getOtp().setStaticEnabled(true); // enable the lab OTP verifier
@@ -91,18 +92,18 @@ class RelayAuthenticationServiceKycAuthTest {
 
     // PSUT must equal the deterministic derivation.
     assertEquals(
-        kycTokenService.derivePsut(RP, CLIENT, "national_id", INDIVIDUAL_ID),
+        kycTokenService.derivePsut(RP, CLIENT, "uin", INDIVIDUAL_ID),
         result.getPartnerSpecificUserToken());
 
     // CRITICAL: Relay was asked ONLY for the account-check claim (no demographics before consent).
     assertEquals(1, stub.requests().size(), "exactly one Relay account-check call");
-    String body = stub.lastRequest().body;
+    String query = stub.lastRequest().query;
     assertTrue(
-        body.contains("\"claims\":[\"individual_id\"]"),
+        query.contains("fields=individual_id"),
         "account-check must request only [individual_id]");
-    assertFalse(body.contains("\"name\""), "no demographic claim must be requested");
-    assertFalse(body.contains("\"birthdate\""), "no demographic claim must be requested");
-    assertFalse(stub.lastRequest().body.contains("\"given_name\""), "no demographics requested");
+    assertFalse(query.contains("name"), "no demographic claim must be requested");
+    assertFalse(query.contains("birthdate"), "no demographic claim must be requested");
+    assertFalse(query.contains("given_name"), "no demographics requested");
   }
 
   // --- wrong challenge: no Relay call ---
@@ -156,7 +157,7 @@ class RelayAuthenticationServiceKycAuthTest {
   void sourceUnavailableMapsToRelayUnavailable() {
     stub.setNextResponse(
         StubResponse.problem(
-            503, "{\"type\":\"x\",\"title\":\"t\",\"code\":\"release.source_unavailable\"}"));
+            503, "{\"type\":\"x\",\"title\":\"t\",\"code\":\"source.unavailable\"}"));
 
     KycAuthException ex =
         assertThrows(KycAuthException.class, () -> service.doKycAuth(RP, CLIENT, kycAuth(OTP_VALUE)));
@@ -175,17 +176,17 @@ class RelayAuthenticationServiceKycAuthTest {
     assertEquals("relay_auth_relay_unavailable", ex.getErrorCode());
   }
 
-  // --- distinguishable config error: scope denied ---
+  // --- concealed authorization denial: generic subject denial ---
 
   @Test
-  void scopeDeniedMapsToConfigError() {
+  void concealedResourceMapsToGenericSubjectDenied() {
     stub.setNextResponse(
-        StubResponse.problem(403, "{\"type\":\"x\",\"title\":\"t\",\"code\":\"auth.scope_denied\"}"));
+        StubResponse.problem(404, "{\"type\":\"x\",\"title\":\"t\",\"code\":\"resource.not_found\"}"));
 
     KycAuthException ex =
         assertThrows(KycAuthException.class, () -> service.doKycAuth(RP, CLIENT, kycAuth(OTP_VALUE)));
 
-    assertEquals("relay_config_scope_denied", ex.getErrorCode());
+    assertEquals("relay_auth_subject_denied", ex.getErrorCode());
   }
 
   // --- input validation ---

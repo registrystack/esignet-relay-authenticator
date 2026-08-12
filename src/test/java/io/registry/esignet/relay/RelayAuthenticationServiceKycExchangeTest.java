@@ -48,7 +48,7 @@ class RelayAuthenticationServiceKycExchangeTest {
   private static final String CLIENT = "test-client";
   private static final String TXN = "txn-exchange-1";
   private static final String INDIVIDUAL_ID = "NID-2001";
-  private static final String ID_TYPE = "national_id";
+  private static final String ID_TYPE = "uin";
 
   private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -66,6 +66,7 @@ class RelayAuthenticationServiceKycExchangeTest {
     stub = new RelayStubServer();
     props = TestProperties.valid();
     props.getRelay().setBaseUrl(stub.baseUrl());
+    props.getMint().setTokenEndpoint(stub.mintTokenEndpoint());
     props.getRelay().setConnectTimeoutMs(2000);
     props.getRelay().setReadTimeoutMs(1000);
     props.getEsignet().getAuth().getOtp().setStaticEnabled(true); // exchange never calls the verifier
@@ -111,15 +112,15 @@ class RelayAuthenticationServiceKycExchangeTest {
 
     KycExchangeResult result = service.doKycExchange(RP, CLIENT, dto);
 
-    // (a) Relay was called with the profile-filtered intersection — no sub/$psut, no gender.
+    // (a) Relay was called with the provisioned intersection: no sub/$psut and no gender.
     assertEquals(1, stub.requests().size(), "exactly one Relay release call");
-    String body = stub.lastRequest().body;
+    String query = stub.lastRequest().query;
     assertTrue(
-        body.contains("\"claims\":[\"individual_id\",\"name\",\"given_name\"]"),
+        query.contains("fields=individual_id,name,given_name"),
         "Relay must be asked only for intersection(accepted, profile)");
-    assertFalse(body.contains("\"sub\""), "sub must never be requested from Relay");
-    assertFalse(body.contains("$psut"), "$psut must never be requested from Relay");
-    assertFalse(body.contains("\"gender\""), "non-profile claim must be omitted");
+    assertFalse(query.contains("sub"), "sub must never be requested from Relay");
+    assertFalse(query.contains("$psut"), "$psut must never be requested from Relay");
+    assertFalse(query.contains("gender"), "non-profile claim must be omitted");
 
     // (b) The returned encryptedKyc is a 3-part RS256 JWS that verifies against the signing cert.
     String jws = result.getEncryptedKyc();
@@ -224,14 +225,13 @@ class RelayAuthenticationServiceKycExchangeTest {
         "an unsupported JWE response must be rejected BEFORE any Relay release happens");
   }
 
-  // --- no consented Relay claim remains: skip Relay, never release profile defaults ---
+  // --- no consented Relay property remains: skip Relay rather than sending empty fields ---
 
   @Test
   void noConsentedRelayClaimSkipsRelayAndReturnsOnlySub() throws Exception {
     // Accept only protocol-derived `sub` and a mapped-but-non-profile claim (gender). Both reduce out
-    // of the Relay request, leaving an empty source list. The plugin must NOT call Relay — omitting
-    // the claims field would make Relay release its profile DEFAULTS, an over-release nobody consented
-    // to. A response is staged anyway to prove it is never consumed.
+    // of the Relay request, leaving an empty property list. The plugin must NOT call Relay because V2
+    // fields must be explicit and non-empty. A response is staged anyway to prove it is never consumed.
     stub.setNextResponse(StubResponse.json(200, RelayStubServer.SUCCESS_BODY));
     String token = issueToken();
     KycExchangeDto dto = exchangeDto(token, List.of("sub", "gender"));
@@ -240,7 +240,7 @@ class RelayAuthenticationServiceKycExchangeTest {
 
     assertTrue(
         stub.requests().isEmpty(),
-        "Relay must NOT be called when no consented, profile-filtered claim remains");
+        "Relay must NOT be called when no consented, provisioned property remains");
 
     String jws = result.getEncryptedKyc();
     assertNotNull(jws, "must still return a signed payload carrying the protocol sub");
@@ -252,7 +252,7 @@ class RelayAuthenticationServiceKycExchangeTest {
             new TypeReference<Map<String, Object>>() {});
     String expectedPsut = kycTokenService.derivePsut(RP, CLIENT, ID_TYPE, INDIVIDUAL_ID);
     assertEquals(expectedPsut, payload.get("sub"), "sub must equal the derived PSUT");
-    assertEquals(1, payload.size(), "only sub may be present — no profile defaults released");
+    assertEquals(1, payload.size(), "only sub may be present; no Relay properties were requested");
     assertFalse(payload.containsKey("gender"), "a non-profile claim must never be released");
   }
 
@@ -279,7 +279,7 @@ class RelayAuthenticationServiceKycExchangeTest {
   void sourceUnavailableMapsToRelayUnavailable() {
     stub.setNextResponse(
         StubResponse.problem(
-            503, "{\"type\":\"x\",\"title\":\"t\",\"code\":\"release.source_unavailable\"}"));
+            503, "{\"type\":\"x\",\"title\":\"t\",\"code\":\"source.unavailable\"}"));
     String token = issueToken();
     KycExchangeDto dto = exchangeDto(token, List.of("individual_id"));
 

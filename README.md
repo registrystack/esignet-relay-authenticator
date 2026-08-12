@@ -1,128 +1,81 @@
 # eSignet Relay Authenticator
 
-An [eSignet](https://github.com/mosip/esignet) `Authenticator` SPI plugin that
-authenticates subjects and releases identity claims through the **Registry
-Relay governed attribute-release endpoint** — not through a raw row-read API.
+An [eSignet](https://github.com/mosip/esignet) `Authenticator` SPI plugin that verifies an
+authentication challenge and obtains consent-limited identity properties from Registry Relay V2.
 
-The plugin bridges eSignet's OIDC authentication and KYC-exchange flows to a
-purpose-bound, projection-limited Relay *attribute-release profile*. Relay
-performs the policy decision (scope, purpose/ODRL, release predicate, claim
-projection) and returns only the claims approved for the named profile, mapped
-into OIDC/UserInfo shape. The plugin adds eSignet-side concerns: challenge
-verification, a short-lived internal KYC token, a partner-specific subject
-(PSUT), configuration-driven claim mapping, and self-contained JWS signing of
-the UserInfo payload.
+Version 0.2.0 uses one governed Relay consultation lookup:
 
----
+```text
+POST /v2/resources/{resource}/lookups/{lookup}?fields=...&accessProfile=...
+```
 
-## What it does
+The request body is exactly `{"selectors":{"uin":"..."}}`. The plugin reads identity values only
+from `data.domainData`. It does not use Relay V1 attribute-release routes, static bearer tokens,
+client secrets, caller purpose headers, or broad record-list APIs.
 
-- Implements the eSignet `io.mosip.esignet.api.spi.Authenticator` SPI:
-  `doKycAuth`, `doKycExchange`, `doVerifiedKycExchange`, `sendOtp`,
-  `isSupportedOtpChannel`, and `getAllKycSigningCertificates`.
-- Calls the Relay **attribute-release** endpoint
-  (`POST /v1/attribute-releases/{profile_id}/versions/{version}/resolve`) — a
-  governed, exactly-one-subject lookup — and never a broad entity/row read.
-- Verifies an authentication challenge (a pluggable `ChallengeVerifier`; a
-  static-OTP implementation ships for local demos) **before** any Relay call.
-- During `doKycAuth`, performs a minimal account-check release
-  (default `["individual_id"]`) so **no demographic claims are released before
-  consent**.
-- Issues a short-lived, HMAC-signed (HS256) internal KYC token bound to
-  relying party, client, transaction, and subject.
-- Derives a deterministic **partner-specific subject (PSUT)** so relying
-  parties never receive the raw national ID.
-- During `doKycExchange`, requests only `intersection(eSignet-accepted claims,
-  profile-declared claims)` from Relay (optional-claim omission is the plugin's
-  job because Relay V1 denies the whole request on any out-of-profile claim),
-  maps them to OIDC UserInfo, and returns a **self-contained RS256 JWS**.
-- Exposes the matching X.509 signing certificate (same `kid` and algorithm as
-  the JWS header) via `getAllKycSigningCertificates`.
+## Security and privacy behavior
 
-## What it does *not* do
+- The configured `ChallengeVerifier` succeeds before any Mint or Relay call.
+- `doKycAuth` requests only the provisioned account-check property, by default `individual_id`.
+- `doKycExchange` sends only the intersection of eSignet-consented claims, the configured claim map,
+  and `registry.relay.default-claims`.
+- The selector is present only in the JSON body. It is never placed in a path, query, exception, or
+  log.
+- Relay access tokens come from Registry Mint OAuth client credentials using `private_key_jwt`.
+  Assertions have exact token-endpoint audience, `iss == sub == client_id`, a configured `kid`, a
+  fresh `jti`, and bounded `iat`/`exp`. No client secret is supported.
+- The token cache is process-local and single-flight. Its lifetime is the smaller of Mint's
+  `expires_in` and `registry.mint.token-cache-max-seconds`. Rejected, expired, and replaced token
+  buffers are cleared.
+- Relay unresolved, concealed, and denied outcomes produce one generic non-retryable subject denial.
+  Mint, Relay authentication, audit/source availability, timeout, malformed response, and transport
+  failures produce one generic retryable unavailable outcome. HTTP status alone is never used to
+  infer membership.
+- The plugin preserves partner-specific subjects (PSUT), its short-lived internal KYC token, and the
+  self-contained RS256 KYC/UserInfo JWS.
 
-- No broad row reads and no local persistent cache of released attributes.
-- No `X-API-Key` path — Relay credentials are always sent as
-  `Authorization: Bearer` on the wire.
-- No production authentication mechanism of its own: the bundled static OTP is
-  for local/demo use only (see below). Production deployments supply a real
-  `ChallengeVerifier`.
-- No JWE encryption of the KYC response (see *Known limitations*): a JWE request
-  **fails closed** rather than returning unencrypted data.
-- No fabricated identity-assurance metadata in `doVerifiedKycExchange`.
+## Requirements and build
 
----
-
-## Requirements
-
-| | |
+| Requirement | Version |
 |---|---|
-| Target eSignet | **1.8.0** (`io.mosip.esignet:esignet-integration-api:1.8.0`, `provided` scope) |
-| Java | **21** |
-| Build | **Maven 3.9+** |
-
-eSignet supplies the integration API, Spring, and Jackson at runtime, so those
-are `provided` dependencies here.
-
-## Build
+| eSignet integration API | 1.8.0 |
+| Java | 21 |
+| Maven | 3.9+ |
 
 ```bash
-mvn -B verify            # compile, run all tests, build the JAR
-mvn -DskipTests package  # build the JAR only
+mvn -B -ntp verify
 ```
 
-The artifact is `target/esignet-relay-authenticator-<version>.jar`.
+The artifact is `target/esignet-relay-authenticator-0.2.0.jar`. A `v0.2.0` tag publishes the JAR and
+`esignet-relay-authenticator-0.2.0.jar.sha256` as GitHub Release assets.
 
-Tagging a release (`v*`) publishes that JAR as a GitHub Release asset
-(`.github/workflows/release.yml`) so downstream deployments can consume a pinned
-version. See [`docs/solmara-lab-deployment.md`](docs/solmara-lab-deployment.md).
+Tests use local JDK HTTP stubs for both Registry Mint and Relay. No live Registry Stack or eSignet
+deployment is required.
 
-## Run the tests
+The plugin implements `doKycAuth`, both KYC exchange variants, `sendOtp`, supported-channel lookup,
+and KYC signing-certificate publication. eSignet supplies the integration API, Spring, and Jackson
+at runtime through `provided` Maven dependencies.
 
-```bash
-mvn -B test
-```
-
-Tests are fully self-contained — they use a JDK `com.sun.net.httpserver`-based
-Relay stub (`RelayStubServer`) that follows
-[`docs/relay-attribute-release-contract.md`](docs/relay-attribute-release-contract.md),
-and generate in-memory test-only signing keys. **No running eSignet, Relay,
-Solmara Lab, or network access is required.**
-
----
-
-## Configuring eSignet to load the plugin
-
-eSignet loads authenticator plugins by package scan plus a bean selector:
-
-```properties
-mosip.esignet.integration.scan-base-package=io.registry.esignet.relay
-mosip.esignet.integration.authenticator=RelayAuthenticationService
-```
-
-The `RelayAuthenticationService` bean (and its collaborator beans) load **only**
-when `mosip.esignet.integration.authenticator=RelayAuthenticationService`; any
-other value leaves the plugin dormant.
-
-A full property reference and deployment/packaging walkthrough is in
-[`docs/esignet-configuration.md`](docs/esignet-configuration.md).
-
-### Minimal eSignet property example
+## Minimal configuration
 
 ```properties
 mosip.esignet.integration.scan-base-package=io.registry.esignet.relay
 mosip.esignet.integration.authenticator=RelayAuthenticationService
 
-registry.relay.base-url=http://registry-relay:8080
-registry.relay.attribute-release.profile-id=esignet-civil-userinfo
-registry.relay.attribute-release.profile-version=v1
-registry.relay.attribute-release.purpose=https://demo.example.gov/purpose/esignet-identity-verification
-registry.relay.auth.bearer-token-file=${REGISTRY_RELAY_AUTH_BEARER_TOKEN_FILE}
+registry.relay.base-url=https://registry-relay.example.org
+registry.relay.resource=civil-person
+registry.relay.lookup=by-uin
+registry.relay.access-profile=esignet
+registry.relay.default-claims=individual_id,name,given_name,family_name,birthdate
 
+registry.mint.token-endpoint=https://registry-mint.example.org/token
+registry.mint.client-id=esignet-relay-authenticator
+registry.mint.private-jwk=${REGISTRY_MINT_CLIENT_PRIVATE_JWK}
+
+registry.esignet.subject-id-type=uin
+registry.esignet.account-check-claims=individual_id
 registry.esignet.auth.supported-factors=OTP
-# ⚠ LOCAL DEMO ONLY — see "Static OTP" below. Do NOT enable in production.
-registry.esignet.auth.otp.static-enabled=true
-registry.esignet.auth.otp.static-value=111111
+registry.esignet.auth.otp.static-enabled=false
 
 registry.esignet.kyc-token.hmac-secret=${REGISTRY_ESIGNET_KYC_TOKEN_SECRET}
 registry.esignet.psut.hmac-secret=${REGISTRY_ESIGNET_PSUT_SECRET}
@@ -132,154 +85,54 @@ registry.esignet.kyc.signing.key-alias=${REGISTRY_ESIGNET_KYC_KEY_ALIAS}
 registry.esignet.kyc.signing.key-password=${REGISTRY_ESIGNET_KYC_KEY_PASSWORD}
 ```
 
----
+`registry.relay.access-profile` is optional only when the Relay operation's default access profile is
+the intended contract. When configured, it is sent as `accessProfile`. Authority and purpose remain
+verified token claims minted from Registry Mint's server-side client registration, never caller
+headers or query hints.
 
-## Required Relay endpoint contract
+The supported Mint key source is a secret-provided RSA private JWK with `kty=RSA`, `alg=RS256`, a
+non-empty `kid`, modulus at least 2048 bits, and private CRT members `n`, `e`, `d`, `p`, `q`, `dp`,
+`dq`, and `qi`. The complete JWK is redacted by configuration rendering and must not be committed.
 
-The plugin expects the governed attribute-release endpoint described in
-[`docs/relay-attribute-release-contract.md`](docs/relay-attribute-release-contract.md)
-(the source of truth for the Relay client and its test stub). In summary:
+## Static OTP warning
 
-- **Endpoint:** `POST /v1/attribute-releases/{profile_id}/versions/{version}/resolve`
-- **Authorization:** always `Authorization: Bearer <token>`. The current token is
-  read from the configured secret file immediately before each request. There is
-  **no** `X-API-Key` header path.
-- **Request body:** `{ "subject": { "id_type": "...", "value": ... } }` with an
-  optional `"claims": [...]`. The body is strict (`deny_unknown_fields`); the
-  plugin **omits** the `claims` field entirely when its computed list is empty
-  (an explicit empty `claims: []` is a 400). Absent `claims` ⇒ the profile
-  default set.
-- **Success body:** `{ "profile_id", "profile_version", "claims": {...},
-  "source"? }` — there is **no** top-level `purpose` field; `source` is treated
-  as optional metadata.
-- **Errors:** RFC 9457 `application/problem+json` with a machine-readable
-  `code`. The plugin selects its error from the `code`, **not** the HTTP status.
+The bundled static OTP verifier is for local demonstrations only. It is disabled by default and is
+not a production authentication mechanism. Production deployments must provide a real
+`ChallengeVerifier` bean.
 
-### Collapsed denials — do not surface sub-reasons
+## KYC response
 
-Relay deliberately collapses subject-not-found, ambiguous-subject,
-release-denied, and required-claim-missing into a single
-`release.subject_denied` (HTTP 403) to prevent enumeration. The plugin maps this
-to **one** generic `relay_auth_subject_denied` failure and **must not** disclose
-which underlying condition occurred. Distinguishable `relay_config_*` codes
-(profile-not-found, scope-denied, purpose-required/denied) indicate
-plugin/deployment **misconfiguration** and should be treated as alertable
-operational errors, not per-user auth failures.
+The plugin issues an internal HS256 KYC token bound to relying party, client, transaction, subject,
+and subject-id type. During exchange it derives a deterministic PSUT and signs the resulting UserInfo
+as a compact RS256 JWS. `getAllKycSigningCertificates` returns the matching X.509 certificate.
 
----
+JWE is not supported by the eSignet 1.8.0 integration surface used here. A JWE request fails before
+Relay disclosure. Verified exchange does not fabricate assurance evidence that Relay did not return.
 
-## Secrets and environment variables
+## Known limitations
 
-All secrets come from the environment or a secret manager — **never** committed
-and never logged. The validated config redacts them in `toString`. Both HMAC
-secrets must be **≥ 32 characters** (high-entropy random) or startup validation
-fails; the signing key must be **RSA ≥ 2048 bits**.
+- The internal KYC token is short-lived and bound to relying party, client, transaction, subject, and
+  subject-id type, but this version does not maintain a persistent single-use `jti` store. Protect it
+  as a bearer credential and keep its TTL short.
+- JWE remains fail-closed until the eSignet integration surface provides the relying-party encryption
+  key to the authenticator.
+- Verified exchange cannot emit assurance metadata absent from Relay V2 `domainData` and does not
+  synthesize it.
+- This repository provides self-contained contract and service tests. A live eSignet, Mint, and Relay
+  smoke remains a deployment responsibility.
 
-| Property | Env var (example) | Purpose |
-|---|---|---|
-| `registry.relay.auth.bearer-token-file` | `REGISTRY_RELAY_AUTH_BEARER_TOKEN_FILE` | Absolute path to the mounted Relay bearer credential file |
-| `registry.esignet.kyc-token.hmac-secret` | `REGISTRY_ESIGNET_KYC_TOKEN_SECRET` | HS256 key for the internal KYC token (≥ 32 chars) |
-| `registry.esignet.psut.hmac-secret` | `REGISTRY_ESIGNET_PSUT_SECRET` | HMAC key for PSUT derivation (must differ from the KYC token secret; ≥ 32 chars) |
-| `registry.esignet.kyc.signing.keystore-path` | `REGISTRY_ESIGNET_KYC_KEYSTORE_PATH` | Path to the RSA signing keystore (PKCS12/JKS, RSA ≥ 2048-bit) |
-| `registry.esignet.kyc.signing.keystore-password` | `REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD` | Keystore password |
-| `registry.esignet.kyc.signing.key-alias` | `REGISTRY_ESIGNET_KYC_KEY_ALIAS` | Signing key alias |
-| `registry.esignet.kyc.signing.key-password` | `REGISTRY_ESIGNET_KYC_KEY_PASSWORD` | Signing key password |
-
-No private keys or keystores are committed. See
-[`docs/esignet-configuration.md`](docs/esignet-configuration.md) for generating
-a signing keystore.
-
-The Relay credential file must be an absolute-path regular file no larger than
-16 KiB. Its UTF-8 content must be one RFC 6750 bearer token, with an optional
-single trailing LF or CRLF. Empty, malformed, oversized, missing, and unreadable
-files fail closed before any Relay request is sent. Replace the file atomically
-to rotate the token. The next request reads the replacement; the plugin never
-caches the credential.
-
----
-
-## Static OTP is **not** production authentication
-
-> ⚠️ **The bundled static-OTP `ChallengeVerifier` is for local development and
-> demos ONLY.** It accepts a fixed configured value and proves nothing about the
-> subject. It is **disabled by default** (`registry.esignet.auth.otp.static-enabled=false`)
-> and there is **no** default production static OTP value.
-
-For production, provide a real `ChallengeVerifier` bean (e.g. a genuine OTP/IDA
-factor). The configuration bean is `@ConditionalOnMissingBean`, so dropping in a
-production `ChallengeVerifier` overrides the static one without code changes.
-
----
-
-## Signing and certificates
-
-- UserInfo/KYC payloads are signed as a **self-contained RS256 JWS** using the
-  configured deployment keystore. The JWS header carries a stable `kid` =
-  `base64url(SHA-256(RFC 7638 JWK thumbprint))` of the RSA public key.
-- `getAllKycSigningCertificates` returns the matching X.509 certificate as PEM
-  with the **same** `kid` and algorithm, so eSignet can publish it and relying
-  parties can verify signatures.
-- The code path used in tests and in deployment is identical; tests inject a
-  generated test-only keystore through the production loader.
-
----
-
-## Error codes
-
-Stable internal codes selected from the Relay RFC 9457 `code` (full table in the
-[spec](docs/esignet-relay-authenticator-plugin-spec.md#error-mapping)):
+## Failure codes
 
 | Code | Meaning |
 |---|---|
-| `relay_auth_invalid_request` | local validation / `release.subject_invalid` |
-| `relay_auth_challenge_failed` | challenge verifier rejected the challenge |
-| `relay_auth_subject_denied` | **collapsed** `release.subject_denied` (no sub-reason) |
-| `relay_auth_relay_unavailable` | `release.source_unavailable` (503) or transport timeout |
-| `relay_config_profile_not_found` / `_scope_denied` / `_purpose_required` / `_purpose_denied` | distinguishable misconfiguration (alertable) |
-| `relay_auth_token_invalid` / `relay_auth_token_expired` | KYC token verification |
-| `relay_kyc_jwe_unsupported` | JWE requested but RP encryption key unavailable → **fail closed** |
-| `relay_kyc_signing_failed` / `relay_kyc_signing_unavailable` | signing/keystore failure |
-| `relay_kyc_exchange_failed` | unexpected exchange-flow failure |
+| `relay_auth_invalid_request` | Invalid local eSignet request |
+| `relay_auth_challenge_failed` | Challenge verification failed |
+| `relay_auth_subject_denied` | Generic non-retryable Relay denial, including unresolved or concealed |
+| `relay_auth_relay_unavailable` | Generic retryable Mint/Relay authentication, source, audit, timeout, response, or transport failure |
+| `relay_auth_token_invalid` / `relay_auth_token_expired` | Internal KYC token failure |
+| `relay_kyc_jwe_unsupported` | JWE requested but unavailable, failed before lookup |
+| `relay_kyc_signing_failed` / `relay_kyc_signing_unavailable` | KYC signing failure |
 
----
-
-## Known limitations & production hardening
-
-- **KYC token replay within TTL.** V1 does not keep a persistent single-use
-  `jti` store, so a valid KYC token can be replayed within its short TTL if an
-  attacker obtains it. Mitigated by a short TTL, binding to rp/client/txn/
-  subject, and log redaction. **Production hardening:** add single-use `jti`
-  storage.
-- **JWE not implemented (fail-closed).** `KycExchangeDto` carries no relying-party
-  encryption key and the plugin has no eSignet keymanager API to obtain one, so
-  a JWE-mode request fails closed with `relay_kyc_jwe_unsupported` instead of
-  returning unencrypted data. Unblocked when the RP encryption key becomes
-  available through eSignet runtime/DTO context.
-- **Verified claims deferred.** `doVerifiedKycExchange` returns the same claim
-  values as `doKycExchange` and does **not** synthesize assurance metadata,
-  because Relay V1 returns none. Unblocked when Relay returns verified-claim
-  metadata.
-- **Static OTP** is demo-only (above).
-- **Identifier-echo profile.** The plugin is a trusted caller using an
-  identifier-echo profile (`individual_id == national_id`); a successful release
-  is therefore a subject-existence signal to the plugin, gated behind challenge
-  verification and the release scope.
-- **Integration smoke test.** This repository's tests are self-contained. An
-  end-to-end smoke test against a running eSignet + a live Relay
-  (for example, via Solmara Lab) is **not** included here and remains a follow-up.
-  See [`docs/solmara-lab-deployment.md`](docs/solmara-lab-deployment.md) for
-  how to wire the plugin into Solmara Lab.
-
----
-
-## Documentation
-
-- [`docs/esignet-configuration.md`](docs/esignet-configuration.md) — full
-  property reference, keystore setup, and `esignet-with-plugins` packaging.
-- [`docs/solmara-lab-deployment.md`](docs/solmara-lab-deployment.md) describes how
-  to deploy the plugin JAR into Solmara Lab for end-to-end testing.
-- [`docs/relay-attribute-release-contract.md`](docs/relay-attribute-release-contract.md)
-  — the Relay wire contract used by the client and its test stub.
-- [`docs/esignet-relay-authenticator-plugin-spec.md`](docs/esignet-relay-authenticator-plugin-spec.md)
-  — the full implementation brief and design rationale.
-- [`docs/GOAL.md`](docs/GOAL.md) — the milestone execution plan.
+See [configuration](docs/esignet-configuration.md), the [Relay V2 contract](docs/relay-attribute-release-contract.md),
+the [plugin specification](docs/esignet-relay-authenticator-plugin-spec.md), and the
+[deployment guide](docs/solmara-lab-deployment.md).

@@ -2,7 +2,7 @@ name: Release
 
 # Publishes a pinned plugin JAR as a GitHub Release asset so downstream
 # deployments (e.g. registry-lab) can consume a versioned artifact instead of
-# building from a branch. Push a tag like `v0.1.0` to cut a release.
+# building from a branch. Push a tag like `v0.2.0` to cut a release.
 on:
   push:
     tags:
@@ -28,7 +28,7 @@ jobs:
 
       - name: Derive version from tag
         id: ver
-        # Tag `v0.1.0` -> project/artifact version `0.1.0`.
+        # Tag `v0.2.0` -> project/artifact version `0.2.0`.
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Pin the project version to the tag
@@ -40,12 +40,20 @@ jobs:
       - name: Build and test
         run: mvn -B -ntp verify
 
-      - name: Publish the JAR to the GitHub Release
+      - name: Generate SHA-256 checksum
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: >
+          cd target && sha256sum "esignet-relay-authenticator-${VERSION}.jar"
+          > "esignet-relay-authenticator-${VERSION}.jar.sha256"
+
+      - name: Publish the JAR and checksum to the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: >
           gh release create "${GITHUB_REF_NAME}"
           "target/esignet-relay-authenticator-${VERSION}.jar"
+          "target/esignet-relay-authenticator-${VERSION}.jar.sha256"
           --title "${GITHUB_REF_NAME}"
           --generate-notes
