@@ -60,7 +60,7 @@ require (
 	modernc.org/sqlite v1.53.0 // indirect
 )
 
-replace github.com/thunder-id/thunderid => github.com/thunder-id/thunderid/backend v0.0.0-20260806063513-9a568aec1cbf
+replace github.com/thunder-id/thunderid => ../../thunder
 
 require github.com/jeremi/esignet-relay-authenticator v0.0.0
 
