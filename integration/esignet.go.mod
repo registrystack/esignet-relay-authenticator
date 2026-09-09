@@ -15,7 +15,7 @@ require (
 	github.com/thunder-id/thunderid v0.0.0-20260701124159-a8f0fb52b5c5
 	go.mozilla.org/pkcs7 v0.9.0
 	golang.org/x/crypto v0.53.0
-	golang.org/x/text v0.38.0
+	golang.org/x/text v0.39.0
 	gopkg.in/yaml.v3 v3.0.1
 	software.sslmate.com/src/go-pkcs12 v0.7.3
 )
@@ -62,6 +62,6 @@ require (
 
 replace github.com/thunder-id/thunderid => ../../thunder
 
-require github.com/jeremi/esignet-relay-authenticator v0.0.0
+require github.com/registrystack/esignet-relay-authenticator v0.0.0
 
-replace github.com/jeremi/esignet-relay-authenticator => ../../provider
+replace github.com/registrystack/esignet-relay-authenticator => ../../provider
