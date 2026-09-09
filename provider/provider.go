@@ -107,11 +107,12 @@ func (p *Provider) Authenticate(ctx context.Context, r AuthenticationRequest) (A
 	}
 	verifyCtx, cancel := context.WithTimeout(ctx, time.Duration(p.config.HTTP.TimeoutSeconds)*time.Second)
 	defer cancel()
-	if p.verifier.Verify(verifyCtx, r) != nil {
-		return AuthenticationResult{}, ErrChallengeFailed
-	}
-	if verifyCtx.Err() != nil {
+	verifyErr := p.verifier.Verify(verifyCtx, r)
+	if verifyCtx.Err() != nil || errors.Is(verifyErr, context.DeadlineExceeded) || errors.Is(verifyErr, context.Canceled) {
 		return AuthenticationResult{}, ErrUnavailable
+	}
+	if verifyErr != nil {
+		return AuthenticationResult{}, ErrChallengeFailed
 	}
 	fields, err := p.lookup(ctx, r.Identifier, p.config.BREG.AccountCheckFields)
 	if err != nil {

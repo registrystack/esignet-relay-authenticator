@@ -28,11 +28,15 @@ import (
 
 type verifierStub struct {
 	verifyErr error
+	verifyFn  func(context.Context) error
 	calls     atomic.Int32
 }
 
-func (v *verifierStub) Verify(context.Context, ChallengeRequest) error {
+func (v *verifierStub) Verify(ctx context.Context, _ ChallengeRequest) error {
 	v.calls.Add(1)
+	if v.verifyFn != nil {
+		return v.verifyFn(ctx)
+	}
 	return v.verifyErr
 }
 func (v *verifierStub) SendOTP(context.Context, OTPRequest) error { return nil }
@@ -194,6 +198,39 @@ func TestChallengeFailureNoDownstreamCalls(t *testing.T) {
 	_, e := f.p.Authenticate(context.Background(), AuthenticationRequest{Identifier: "subject-canary", IdentifierType: "uin", Challenge: "bad", Binding: binding()})
 	if e != ErrChallengeFailed || f.mintCalls.Load() != 0 || f.lookupCalls.Load() != 0 {
 		t.Fatal("bad challenge reached downstream")
+	}
+}
+func TestChallengeCancellationNoDownstreamCalls(t *testing.T) {
+	for _, mode := range []string{"timeout", "cancel", "cancel-with-success", "wrapped-deadline", "wrapped-cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFixture(t)
+			f.p.config.HTTP.TimeoutSeconds = 1
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			v := &verifierStub{verifyFn: func(callCtx context.Context) error {
+				switch mode {
+				case "wrapped-deadline":
+					return fmt.Errorf("verification interrupted: %w", context.DeadlineExceeded)
+				case "wrapped-cancel":
+					return fmt.Errorf("verification interrupted: %w", context.Canceled)
+				case "cancel", "cancel-with-success":
+					cancel()
+				}
+				<-callCtx.Done()
+				if mode == "cancel-with-success" {
+					return nil
+				}
+				return callCtx.Err()
+			}}
+			f.p.verifier = v
+			result, err := f.p.Authenticate(ctx, AuthenticationRequest{Identifier: "subject-canary", IdentifierType: "uin", Challenge: "valid", Binding: binding()})
+			if err != ErrUnavailable {
+				t.Fatalf("want unavailable, got %v", err)
+			}
+			if v.calls.Load() != 1 || f.mintCalls.Load() != 0 || f.lookupCalls.Load() != 0 || result.Subject != "" || result.Context != nil {
+				t.Fatal("interrupted verification produced authentication state or downstream traffic")
+			}
+		})
 	}
 }
 func TestRestoredContextBindingsAndExpiry(t *testing.T) {
