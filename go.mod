@@ -1,4 +1,4 @@
-module github.com/jeremi/esignet-relay-authenticator
+module github.com/registrystack/esignet-relay-authenticator
 
 go 1.26.0
 

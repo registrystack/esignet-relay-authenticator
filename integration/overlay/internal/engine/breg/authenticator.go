@@ -8,7 +8,7 @@ import (
 	"errors"
 	"sort"
 
-	core "github.com/jeremi/esignet-relay-authenticator/provider"
+	core "github.com/registrystack/esignet-relay-authenticator/provider"
 	"github.com/mosip/esignet/internal/clientmgmt"
 	"github.com/mosip/esignet/internal/engine/shared"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/common"

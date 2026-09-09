@@ -1,0 +1,200 @@
+name: Release v0.3.0
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-v0.3.0
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      actions: read
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: registrystack/esignet-relay-authenticator
+      RELEASE_TAG: v0.3.0
+      RELEASE_IMAGE: ghcr.io/registrystack/esignet-relay-authenticator:0.3.0
+      ARCHIVE: dist/esignet-breg-candidate.oci.tar
+    steps:
+      - name: Require the canonical main branch
+        run: |
+          test "$GITHUB_REPOSITORY" = "$GH_REPO"
+          test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check exact-main CI and unused publication identities
+        run: |
+          cat > "$RUNNER_TEMP/release-preflight.py" <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          repo = os.environ['GH_REPO']
+          tag = os.environ['RELEASE_TAG']
+          def request(path, allow_missing=False):
+              req = urllib.request.Request('https://api.github.com/' + path, headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'Accept': 'application/vnd.github+json',
+                  'X-GitHub-Api-Version': '2022-11-28',
+              })
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as error:
+                  if allow_missing and error.code == 404:
+                      return None
+                  raise SystemExit('GitHub preflight failed with HTTP ' + str(error.code))
+
+          if request(f'repos/{repo}/branches/main')['commit']['sha'] != os.environ['GITHUB_SHA']:
+              raise SystemExit('Release source is no longer the main HEAD')
+          runs = request(f'repos/{repo}/actions/workflows/ci.yml/runs?event=push&branch=main&head_sha=' + os.environ['GITHUB_SHA'])
+          if not any(run['head_sha'] == os.environ['GITHUB_SHA'] and run['status'] == 'completed' and run['conclusion'] == 'success' for run in runs['workflow_runs']):
+              raise SystemExit('Successful push CI is required for this exact main commit')
+          for endpoint in (f'git/ref/tags/{tag}', f'releases/tags/{tag}'):
+              if request(f'repos/{repo}/{endpoint}', allow_missing=True) is not None:
+                  raise SystemExit('Release identity already exists; inspect and recover the original run')
+          page = 1
+          while True:
+              versions = request(f'orgs/registrystack/packages/container/esignet-relay-authenticator/versions?per_page=100&page={page}', allow_missing=True)
+              if versions is None:
+                  break
+              if any('0.3.0' in version['metadata']['container']['tags'] for version in versions):
+                  raise SystemExit('Container version already exists; overwriting is forbidden')
+              if len(versions) < 100:
+                  break
+              page += 1
+          print('Exact main CI passed; release identities are unused')
+          PY
+          python3 "$RUNNER_TEMP/release-preflight.py"
+          test -z "$(git status --porcelain)"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.26.8'
+          cache: true
+      - name: Verify core and pinned host integration
+        run: |
+          test -z "$(gofmt -l provider)"
+          go test -race ./...
+          go vet ./...
+          ./integration/test.sh
+      - name: Scan reachable core and assembled host vulnerabilities
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          govulncheck ./...
+          cd build/esignet/upstream/esignet-service
+          govulncheck ./cmd/esignet
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Install the OCI publisher
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends skopeo
+      - name: Build the release archive once
+        run: ./integration/build.sh
+      - name: Verify release source and OCI contents
+        run: |
+          (cd dist && sha256sum --check esignet-breg-candidate.oci.tar.sha256)
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import tarfile
+          from pathlib import Path
+
+          archive = Path(os.environ['ARCHIVE'])
+          metadata = json.loads(Path(str(archive) + '.metadata.json').read_text())
+          labels = metadata['labels']
+          expected = {
+              'org.opencontainers.image.source': 'https://github.com/' + os.environ['GH_REPO'],
+              'org.opencontainers.image.version': '0.3.0',
+              'org.opencontainers.image.revision': os.environ['GITHUB_SHA'],
+              'io.registry.source.state': 'clean',
+          }
+          for key, value in expected.items():
+              if labels.get(key) != value:
+                  raise SystemExit('Release label mismatch: ' + key)
+          # Check every archived blob, including image layers and attestations.
+          with tarfile.open(archive) as image:
+              for member in image.getmembers():
+                  if member.isfile() and member.name.startswith('blobs/sha256/'):
+                      digest = hashlib.sha256()
+                      with image.extractfile(member) as stream:
+                          for chunk in iter(lambda: stream.read(1 << 20), b''):
+                              digest.update(chunk)
+                      if digest.hexdigest() != member.name.removeprefix('blobs/sha256/'):
+                          raise SystemExit('OCI blob digest mismatch')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('RELEASE_DIGEST=' + metadata['image_index_digest'] + '\n')
+          PY
+          test -z "$(git status --porcelain)"
+      - name: Smoke-test the exact archive with invalid configuration
+        run: |
+          skopeo --override-os linux --override-arch amd64 copy \
+            "oci-archive:$PWD/$ARCHIVE" docker-daemon:esignet-release-smoke:0.3.0
+          status=0
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            -e MOSIP_ESIGNET_OAUTH_AUTH_CODE_LIFETIME_SECONDS=invalid \
+            esignet-release-smoke:0.3.0 > "$RUNNER_TEMP/startup-smoke.log" 2>&1 || status=$?
+          test "$status" -eq 1
+          grep -Fq 'failed to load app config' "$RUNNER_TEMP/startup-smoke.log"
+          grep -Fq 'invalid MOSIP_ESIGNET_OAUTH_AUTH_CODE_LIFETIME_SECONDS' "$RUNNER_TEMP/startup-smoke.log"
+          echo 'Native image starts and rejects invalid configuration before connecting to services'
+      - name: Attest release archive and sidecars
+        id: attest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: dist/*
+      - name: Preserve the authenticated attestation bundle
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$BUNDLE_PATH" dist/attestation.intoto.jsonl
+      - name: Retain the exact release bytes for recovery
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: esignet-v0.3.0-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish the verified archive without changing its digests
+        run: |
+          python3 "$RUNNER_TEMP/release-preflight.py"
+          printf '%s' "$GH_TOKEN" | skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          skopeo copy --all --preserve-digests "oci-archive:$PWD/$ARCHIVE" "docker://$RELEASE_IMAGE"
+          skopeo inspect --raw "docker://$RELEASE_IMAGE" > "$RUNNER_TEMP/published-index.json"
+          actual_digest="sha256:$(sha256sum "$RUNNER_TEMP/published-index.json" | cut -d ' ' -f 1)"
+          test "$actual_digest" = "$RELEASE_DIGEST"
+      - name: Tag the exact source and publish the release assets
+        run: |
+          gh api --method POST "repos/$GH_REPO/git/refs" \
+            -f ref="refs/tags/$RELEASE_TAG" -f sha="$GITHUB_SHA" > /dev/null
+          cat > "$RUNNER_TEMP/release-notes.md" <<EOF_NOTES
+          Native Go BREG authentication provider for pinned eSignet 2.0.0-beta.1.
+          This replaces the Java plugin and requires migration; see the repository README and CHANGELOG.
+
+          Source: $GITHUB_SHA
+          Image: $RELEASE_IMAGE
+          OCI index: $RELEASE_DIGEST
+
+          The OCI archive contains Linux amd64 and arm64 images, SBOMs, and build provenance.
+          Verify the archive checksum and GitHub artifact attestation before importing it.
+          Publication and verification commands are in docs/release.md at this tag.
+          EOF_NOTES
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            "$ARCHIVE" "$ARCHIVE.sha256" "$ARCHIVE.metadata.json" dist/attestation.intoto.jsonl
+          gh release edit "$RELEASE_TAG" --draft=false
+          printf 'Released source `%s` as `%s@%s`.\n' "$GITHUB_SHA" "${RELEASE_IMAGE%:*}" "$RELEASE_DIGEST" >> "$GITHUB_STEP_SUMMARY"

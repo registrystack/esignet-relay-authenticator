@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
-FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26-bookworm@sha256:9fdc884aacc3bec89b20ffc69f4bb369c78210e3e4f600387b5128b12c199f81 AS build
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26.8-bookworm@sha256:9fdc884aacc3bec89b20ffc69f4bb369c78210e3e4f600387b5128b12c199f81 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY provider ./provider
@@ -11,12 +11,12 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -buildvcs=false -ldflags="-s -w" -o /out/esignet ./cmd/esignet
 
-FROM gcr.io/distroless/base-debian12:nonroot@sha256:7f0c72cd138b442ae0deeb69c08b1acf5525439ba251a49ad93c320a061567e5
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 ARG CANDIDATE_SOURCE_SHA256=unrecorded
 ARG CANDIDATE_SOURCE_REVISION=unknown
 ARG CANDIDATE_SOURCE_STATE=unrecorded
-LABEL org.opencontainers.image.source="https://github.com/jeremi/esignet-relay-authenticator" \
-      org.opencontainers.image.version="0.3.0-candidate" \
+LABEL org.opencontainers.image.source="https://github.com/registrystack/esignet-relay-authenticator" \
+      org.opencontainers.image.version="0.3.0" \
       org.opencontainers.image.revision=$CANDIDATE_SOURCE_REVISION \
       io.registry.source.sha256=$CANDIDATE_SOURCE_SHA256 \
       io.registry.source.state=$CANDIDATE_SOURCE_STATE \
