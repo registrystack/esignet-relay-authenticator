@@ -1,143 +1,106 @@
-# eSignet configuration
+# Provider configuration
 
-## Plugin loading
+Select `MOSIP_ESIGNET_AUTHN_PROVIDER=breg` and mount the file named by
+`REGISTRY_ESIGNET_CONFIG_FILE`. Only one YAML document is accepted. Configuration
+and secret files are read during provider construction; restart after rotation.
+There are no Spring or legacy Java property aliases.
 
-```properties
-mosip.esignet.integration.scan-base-package=io.registry.esignet.relay
-mosip.esignet.integration.authenticator=RelayAuthenticationService
+```yaml
+subject_id_type: uin
+psut_secret_file: /run/secrets/registry-psut
+breg:
+  base_url: https://population.example.org
+  route: population
+  selector: by-uin
+  selector_field: uin
+  access_profile: esignet-source
+  provisioned_fields: [uin, status, givenName, familyName, birthdate, gender]
+  account_check_fields: [uin, status]
+mint:
+  token_endpoint: https://mint.example.org/token
+  client_id: esignet-source
+  private_key_file: /run/secrets/registry-client.jwk
+claim_map:
+  sub: $psut
+  given_name: givenName
+  family_name: familyName
+  birthdate: birthdate
+  gender: gender
+http:
+  timeout_seconds: 10
+  max_response_bytes: 1048576
+demo:
+  static_otp_enabled: false
 ```
 
-All plugin beans and fail-fast validation are conditional on that authenticator selection.
+The BREG package must grant the configured selector and fields to this workload.
+Its row authorization determines which identities are eligible. Use a separate
+client for seeding or administering records; the identity provider needs neither
+list nor write access. The configured account-check set must be a nonempty
+subset of the provisioned inventory.
 
-## Relay V2
+Only explicitly consented and mapped claims are requested. `$psut` is a local
+source token, never a BREG property. Protocol claims cannot be replaced with
+registry fields. Registry Record metadata is never mapped into UserInfo.
 
-| Property | Default | Requirement |
-|---|---:|---|
-| `registry.relay.base-url` | required | Absolute HTTP(S) Relay service URL. Use HTTPS outside loopback. |
-| `registry.relay.resource` | required | Compiled Registry resource identifier. |
-| `registry.relay.lookup` | required | Lookup identifier whose selector is `uin`. |
-| `registry.relay.access-profile` | unset | Explicit compiled access profile. Omit only when the operation default is intended. |
-| `registry.relay.accept` | `application/json` | Relay response media type. |
-| `registry.relay.default-claims` | required | Closed list of provisioned/selectable Relay properties. |
-| `registry.relay.connect-timeout-ms` | `2000` | Positive connection timeout. |
-| `registry.relay.read-timeout-ms` | `5000` | Positive request timeout. |
+## Secrets and transport
 
-The plugin owns the fixed route and request shape. There is no configurable V1 path template,
-profile version, `Data-Purpose`, static bearer token, credential-kind label, or client secret.
+The PSUT file must contain at least 32 bytes of independent random secret
+material. It is not the Mint key, an OTP, or an eSignet signing key. Persisting
+this key preserves subjects across restarts; replacing it changes subjects.
 
-## Registry Mint
+The Mint key file accepts an ES256 P-256 or RS256 RSA private JWK. RSA keys must
+be at least 2048 bits. A PEM PKCS8/PKCS1 key is also accepted with explicit
+`mint.key_id`. Prefer the JWK exported by the native BREG development tooling.
+Store files as private operator-owned material, never inside a container image.
 
-| Property | Default | Requirement |
-|---|---:|---|
-| `registry.mint.token-endpoint` | required | Absolute Mint token endpoint and exact JWT assertion audience. |
-| `registry.mint.client-id` | required | Registered Mint client. Used for both `iss` and `sub`. |
-| `registry.mint.private-jwk` | required | Secret-provided private RSA JWK described below. |
-| `registry.mint.assertion-lifetime-seconds` | `120` | 1 through 300 seconds. |
-| `registry.mint.token-cache-max-seconds` | `300` | 1 through 3600 seconds, further bounded by Mint `expires_in`. |
-| `registry.mint.connect-timeout-ms` | `2000` | Positive connection timeout. |
-| `registry.mint.read-timeout-ms` | `5000` | Positive request timeout. |
+`mint.assertion_audience` defaults to `token_endpoint`. Set it explicitly only
+when the configured issuer audience differs from its transport URL, such as a
+native local issuer reached from Docker through `host.docker.internal`.
+Assertions default to 120 seconds and token caching to at most 300 seconds,
+further shortened by Mint's returned lifetime. Requests never contain a scope
+or client secret.
 
-The private JWK must have `kty=RSA`, `alg=RS256`, a non-empty `kid`, an RSA modulus of at least 2048
-bits, and private CRT members `n`, `e`, `d`, `p`, `q`, `dp`, `dq`, and `qi`. Store the compact JSON in
-a secret manager, for example:
+HTTPS is required by default. `http.ca_file` adds a PEM CA bundle to system
+trust. `http.allow_insecure_http: true` is an explicit local-fixture setting;
+use authenticated TLS for operated services. Redirects are not followed.
 
-```properties
-registry.mint.private-jwk=${REGISTRY_MINT_CLIENT_PRIVATE_JWK}
+## Challenge verification
+
+A production adapter supplies the Go interface through
+`provider.New(cfg, provider.WithChallengeVerifier(verifier))`. Its `Verify`
+method must authenticate the exact identifier and binding in the request.
+`SendOTP` initiates that same challenge through the institution's delivery
+system. Implementations must honor context cancellation and never log challenge
+or subject values. Verification failure stops before Mint and BREG.
+
+The shipped factory has no implicit production verifier. It fails startup
+unless a real verifier is injected or synthetic mode is explicitly enabled:
+
+```yaml
+demo:
+  static_otp_enabled: true
+  static_otp_file: /run/secrets/demo-otp
 ```
 
-The complete JWK is redacted from `toString`. The plugin supports no secret-based OAuth client
-authentication. Register the corresponding public JWK and Relay scopes/claims in Mint's server-side
-client registry.
+Synthetic mode accepts that one configured value and sends no email or SMS.
+It proves flow composition only, not the identity of a person. Solmara's
+fictional fixtures use this mode explicitly. Enrollment, signup, password,
+biometrics and wallet authentication are not exposed by this integration.
 
-## eSignet flow and claims
+## eSignet configuration
 
-| Property | Default | Requirement |
-|---|---:|---|
-| `registry.esignet.subject-id-type` | `uin` | Internal KYC-token and PSUT subject-id type. |
-| `registry.esignet.account-check-claims` | `individual_id` | Non-empty subset of `registry.relay.default-claims`. |
-| `registry.esignet.claim-map.<claim>` | built-in map | eSignet claim to Relay property; `$psut` is local only. |
-| `registry.esignet.auth.supported-factors` | unset | Factors exposed by the verifier. |
-| `registry.esignet.auth.otp.channels` | unset | Static-demo verifier channels. |
-| `registry.esignet.auth.otp.static-enabled` | `false` | Must remain false in production. |
-| `registry.esignet.auth.otp.static-value` | unset | Demo-only secret. |
+Use the supplied `flow-breg-otp` flow. It includes OTP initiation/verification,
+authorization, fresh consent and assertion. The consent wrapper forces a new
+prompt for each flow, including repeated logins with an unchanged claim set.
 
-The default claim map includes `sub=$psut`, `individual_id`, `name`, `given_name`, `family_name`,
-`birthdate`, `gender`, and `address.region`. Dotted keys can use Spring bracket binding:
+The engine's prerequisite call uses nil requested attributes before consent;
+the adapter rejects that call without consuming its attribute context. An
+approved empty set succeeds without consulting BREG. This distinction is part
+of the supported integration contract.
 
-```properties
-registry.esignet.claim-map[address.region]=address.region
-```
-
-`doKycAuth` verifies the challenge, then calls Relay with only account-check fields. `doKycExchange`
-verifies the internal token and rejects unsupported JWE before calculating the consented property
-intersection. When that intersection is empty, it skips Relay entirely.
-
-## Internal KYC token and PSUT
-
-| Property | Default | Requirement |
-|---|---:|---|
-| `registry.esignet.kyc-token.hmac-secret` | required | At least 32 characters. |
-| `registry.esignet.kyc-token.ttl-seconds` | `300` | Positive. |
-| `registry.esignet.psut.hmac-secret` | required | At least 32 characters and different from the KYC-token key. |
-
-## KYC/UserInfo signing
-
-| Property | Default | Requirement |
-|---|---:|---|
-| `registry.esignet.kyc.response-mode` | `self-contained-jws` | Current supported production mode. |
-| `registry.esignet.kyc.signing.algorithm` | `RS256` | JWS algorithm. |
-| `registry.esignet.kyc.signing.keystore-type` | `PKCS12` | JDK keystore type. |
-| `registry.esignet.kyc.signing.keystore-path` | required | Secret-mounted keystore. |
-| `registry.esignet.kyc.signing.keystore-password` | required | Secret. |
-| `registry.esignet.kyc.signing.key-alias` | required | RSA signing key alias. |
-| `registry.esignet.kyc.signing.key-password` | required | Secret. |
-
-The signing key must be RSA 2048 bits or stronger. The JWS `kid` and the certificate returned by
-`getAllKycSigningCertificates` use the same RFC 7638 thumbprint-derived identifier.
-
-Generate a deployment key with the JDK toolchain, then place it in the platform secret store:
-
-```bash
-keytool -genkeypair \
-  -alias esignet-relay-kyc \
-  -keyalg RSA -keysize 2048 \
-  -dname "CN=esignet-relay-authenticator" \
-  -validity 825 \
-  -storetype PKCS12 \
-  -keystore kyc-signing.p12 \
-  -storepass "$REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD" \
-  -keypass "$REGISTRY_ESIGNET_KYC_KEY_PASSWORD"
-```
-
-Do not build the keystore into the image or commit it.
-
-## Environment example
-
-```properties
-registry.relay.base-url=https://relay.example.gov
-registry.relay.resource=civil-person
-registry.relay.lookup=by-uin
-registry.relay.access-profile=esignet
-registry.relay.default-claims=individual_id,name,given_name,family_name,birthdate
-
-registry.mint.token-endpoint=https://mint.example.gov/token
-registry.mint.client-id=esignet-relay-authenticator
-registry.mint.private-jwk=${REGISTRY_MINT_CLIENT_PRIVATE_JWK}
-
-registry.esignet.kyc-token.hmac-secret=${REGISTRY_ESIGNET_KYC_TOKEN_SECRET}
-registry.esignet.psut.hmac-secret=${REGISTRY_ESIGNET_PSUT_SECRET}
-registry.esignet.kyc.signing.keystore-path=${REGISTRY_ESIGNET_KYC_KEYSTORE_PATH}
-registry.esignet.kyc.signing.keystore-password=${REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD}
-registry.esignet.kyc.signing.key-alias=${REGISTRY_ESIGNET_KYC_KEY_ALIAS}
-registry.esignet.kyc.signing.key-password=${REGISTRY_ESIGNET_KYC_KEY_PASSWORD}
-```
-
-Never log or commit private JWKs, access tokens, assertions, selectors, OTPs, HMAC keys, KYC tokens,
-PSUTs, source values, problem bodies, or keystore credentials.
-
-## Packaging in eSignet
-
-Place the verified JAR in the plugin directory used by `esignet-with-plugins`, provide the loader and
-plugin properties through the deployment configuration source, mount the private JWK and KYC signing
-secrets, and restart eSignet. The plugin JAR relies on eSignet's provided integration API, Spring, and
-Jackson versions and therefore does not bundle them.
+Configure PostgreSQL, Redis, keymanager, public issuer and UI through the pinned
+eSignet runtime settings. The provider does not own those systems. The
+synthetic fixture explicitly enables upstream's software PKCS12 keystore;
+production key custody remains a deployment concern. Final signed or encrypted
+UserInfo is generated by eSignet according to its client registration.

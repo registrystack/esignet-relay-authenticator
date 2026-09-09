@@ -1,4 +1,9 @@
 target/
+build/
+dist/
+.cache/
+coverage.out
+*.test
 *.class
 *.jar
 *.log
