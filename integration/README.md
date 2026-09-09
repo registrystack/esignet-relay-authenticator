@@ -24,6 +24,8 @@ its actual assurance; the demo does not advertise generated-code or password.
 The host access-log patch records URL paths and omits Referer values, so OAuth
 query parameters and callback codes do not enter access logs. Request handling
 still receives the original URL and headers.
+Runtime-store debug messages retain namespace diagnostics without logging record
+keys or values.
 
 `test.sh` tests the assembled client validation, adapter, executor, engine, and
 host entrypoint, and builds the host binary. `build.sh` exports both Linux amd64
