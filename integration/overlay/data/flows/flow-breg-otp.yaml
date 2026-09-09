@@ -1,0 +1,226 @@
+id: flow-breg-otp
+handle: flow-breg-otp
+name: BREG OTP sign-in
+flowType: AUTHENTICATION
+activeVersion: 1
+nodes:
+  - id: start
+    type: START
+    onSuccess: select_otp
+
+  - id: select_otp
+    type: PROMPT
+    variant: LOGIN_OPTIONS
+    properties:
+      authMethodMapping:
+        "mosip:idp:acr:static-code": select_otp_action
+    meta:
+      components:
+        - id: method_block
+          type: BLOCK
+          category: BLOCK
+          resourceType: ELEMENT
+          components:
+            - id: select_otp_action
+              type: ACTION
+              category: ACTION
+              resourceType: ELEMENT
+              eventType: SUBMIT
+              variant: PRIMARY
+              label: Sign in with verification code
+    prompts:
+      - action:
+          ref: select_otp_action
+          nextNode: prompt_identifier
+
+  - id: prompt_identifier
+    type: PROMPT
+    meta:
+      components:
+        - id: heading
+          type: TEXT
+          category: DISPLAY
+          resourceType: ELEMENT
+          variant: HEADING_3
+          label: Sign in to {{meta(application.name)}}
+        - id: identifier_block
+          type: BLOCK
+          category: BLOCK
+          resourceType: ELEMENT
+          components:
+            - id: username_input
+              ref: username
+              type: TEXT_INPUT
+              category: FIELD
+              resourceType: ELEMENT
+              label: Identity number
+              required: true
+            - id: send_otp_action
+              type: ACTION
+              category: ACTION
+              resourceType: ELEMENT
+              eventType: SUBMIT
+              variant: PRIMARY
+              label: Send code
+    prompts:
+      - inputs:
+          - ref: username_input
+            identifier: username
+            type: TEXT_INPUT
+            required: true
+        action:
+          ref: send_otp_action
+          nextNode: send_otp
+
+  - id: send_otp
+    type: TASK_EXECUTION
+    executor:
+      name: eSignetOtpExecutor
+    onSuccess: prompt_otp
+
+  - id: prompt_otp
+    type: PROMPT
+    meta:
+      components:
+        - id: otp_heading
+          type: TEXT
+          category: DISPLAY
+          resourceType: ELEMENT
+          variant: HEADING_3
+          label: Enter your verification code
+        - id: otp_block
+          type: BLOCK
+          category: BLOCK
+          resourceType: ELEMENT
+          components:
+            - id: otp_input
+              ref: otp
+              type: OTP_INPUT
+              category: FIELD
+              resourceType: ELEMENT
+              label: Verification code
+              required: true
+            - id: verify_action
+              type: ACTION
+              category: ACTION
+              resourceType: ELEMENT
+              eventType: SUBMIT
+              variant: PRIMARY
+              label: Verify
+    prompts:
+      - inputs:
+          - ref: otp_input
+            identifier: otp
+            type: OTP_INPUT
+            required: true
+        action:
+          ref: verify_action
+          nextNode: authenticate
+
+  - id: authenticate
+    type: TASK_EXECUTION
+    executor:
+      name: CredentialsAuthExecutor
+      inputs:
+        - ref: username_input
+          identifier: username
+          type: TEXT_INPUT
+          required: true
+        - ref: otp_input
+          identifier: otp
+          type: OTP_INPUT
+          required: true
+    onSuccess: clear_otp
+
+  - id: clear_otp
+    type: TASK_EXECUTION
+    executor:
+      name: eSignetClearInputsExecutor
+      inputs:
+        - identifier: otp
+          type: OTP_INPUT
+    onSuccess: authorization_check
+
+  - id: authorization_check
+    type: TASK_EXECUTION
+    executor:
+      name: AuthorizationExecutor
+    onSuccess: consent_check
+
+  - id: consent_check
+    type: TASK_EXECUTION
+    properties:
+      timeout: "120"
+    executor:
+      name: ConsentExecutor
+      inputs:
+        - ref: input_consent
+          identifier: consent_decisions
+          type: CONSENT_INPUT
+          required: true
+    onSuccess: auth_assert
+    onIncomplete: prompt_consent
+
+  - id: prompt_consent
+    type: PROMPT
+    meta:
+      components:
+        - id: consent_heading
+          type: TEXT
+          category: DISPLAY
+          resourceType: ELEMENT
+          variant: HEADING_3
+          label: Share information with {{meta(application.name)}}
+        - id: consent_block
+          type: BLOCK
+          category: BLOCK
+          resourceType: ELEMENT
+          components:
+            - id: input_consent
+              type: CONSENT
+              category: DISPLAY
+              config:
+                essential: Required information
+                optional: Optional information
+                essentialInfo: This application requires these details to continue.
+                optionalInfo: Choose which optional details to share.
+            - id: allow_action
+              type: ACTION
+              category: ACTION
+              resourceType: ELEMENT
+              eventType: SUBMIT
+              variant: PRIMARY
+              label: Continue
+            - id: deny_action
+              type: ACTION
+              category: ACTION
+              resourceType: ELEMENT
+              eventType: RESET
+              variant: OUTLINE
+              label: Cancel
+    prompts:
+      - inputs:
+          - ref: input_consent
+            identifier: consent_decisions
+            type: CONSENT_INPUT
+            required: true
+        action:
+          ref: allow_action
+          nextNode: consent_check
+      - inputs:
+          - ref: input_consent
+            identifier: consent_decisions
+            type: CONSENT_INPUT
+            required: true
+        action:
+          ref: deny_action
+          nextNode: consent_check
+
+  - id: auth_assert
+    type: TASK_EXECUTION
+    executor:
+      name: AuthAssertExecutor
+    onSuccess: end
+
+  - id: end
+    type: END

@@ -1,0 +1,33 @@
+name: Candidate images
+
+# Candidate artifacts only. Publication and hosted cutover are separate actions.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.26.0'
+          cache: true
+      - name: Verify core and adapter
+        run: |
+          go test -race ./...
+          go vet ./...
+          ./integration/test.sh
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build both Linux architectures without publishing
+        run: ./integration/build.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: esignet-breg-0.3.0-candidate
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7

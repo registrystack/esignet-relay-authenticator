@@ -1,0 +1,135 @@
+--- a/internal/engine/idsystem_factory.go
++++ b/internal/engine/idsystem_factory.go
+@@ -14,6 +14,7 @@
+ 
+ 	"github.com/mosip/esignet/internal/clientmgmt"
+ 	"github.com/mosip/esignet/internal/config"
++	"github.com/mosip/esignet/internal/engine/breg"
+ 	"github.com/mosip/esignet/internal/engine/mock"
+ 	"github.com/mosip/esignet/internal/engine/mosip"
+ 	"github.com/mosip/esignet/internal/engine/shared"
+@@ -33,6 +34,8 @@
+ 	shared.ConsolidatedAuthnProvider, providers.ObservabilityProvider, error) {
+ 
+ 	switch appConfig.Provider {
++	case "breg":
++		return breg.Init(clientSvc)
+ 	case "mosip":
+ 		return mosip.Init(appConfig, clientSvc, httpClient, keyMgrSvc, sigSvc)
+ 	case "sunbird":
+@@ -40,6 +43,6 @@
+ 	case "mock":
+ 		return mock.Init(appConfig, clientSvc, httpClient)
+ 	default:
+-		return nil, nil, fmt.Errorf("unsupported authn provider %q (use mosip, sunbird, or mock)", appConfig.Provider)
++		return nil, nil, fmt.Errorf("unsupported authn provider %q (use breg, mosip, sunbird, or mock)", appConfig.Provider)
+ 	}
+ }
+--- a/cmd/esignet/main.go
++++ b/cmd/esignet/main.go
+@@ -27,6 +27,7 @@
+ 	"github.com/mosip/esignet/internal/config"
+ 	"github.com/mosip/esignet/internal/consentmgmt"
+ 	"github.com/mosip/esignet/internal/engine"
++	"github.com/mosip/esignet/internal/engine/breg"
+ 	"github.com/mosip/esignet/internal/engine/executors"
+ 	"github.com/mosip/esignet/internal/engine/runtimestores"
+ 	"github.com/mosip/esignet/internal/httpmiddleware"
+@@ -143,7 +144,7 @@
+ 		thunderidengine.WithActorProvider(engine.NewActorProvider(clientSvc, appCfg)),
+ 		thunderidengine.WithDefaultAuthnProvider(authnProvider),
+ 		thunderidengine.WithAuthorizationProvider(engine.NewAuthorizationProvider(appCfg)),
+-		thunderidengine.WithConsentProvider(engine.NewConsentProvider(consentmgmt.NewService(pgConn), appCfg)),
++		thunderidengine.WithConsentProvider(breg.WithFreshConsent(appCfg.Provider, engine.NewConsentProvider(consentmgmt.NewService(pgConn), appCfg))),
+ 		thunderidengine.WithDesignResolveProvider(engine.NewDesignProvider(appCfg, runtimeStore, appCfg.DesignCacheTTLSecs)),
+ 		thunderidengine.WithFlowProvider(engine.NewFlowProvider(appCfg, runtimeStore, appCfg.FlowCacheTTLSecs)),
+ 		thunderidengine.WithI18nProvider(engine.NewI18nProvider(appCfg)),
+--- a/internal/clientmgmt/validate.go
++++ b/internal/clientmgmt/validate.go
+@@ -15,9 +15,11 @@
+ )
+ 
+ var allowedClaims = map[string]struct{}{
+-	"name": {}, "given_name": {}, "middle_name": {}, "preferred_username": {},
++	"name": {}, "given_name": {}, "family_name": {}, "middle_name": {}, "preferred_username": {},
+ 	"nickname": {}, "gender": {}, "birthdate": {}, "email": {},
+ 	"phone_number": {}, "picture": {}, "address": {},
++	// Institution business identifier, distinct from the pairwise OIDC subject.
++	"individual_id": {},
+ }
+ 
+ var allowedACRAll = map[string]struct{}{
+--- a/internal/httpmiddleware/accesslog.go
++++ b/internal/httpmiddleware/accesslog.go
+@@ -30,12 +30,11 @@
+ 		applog.GetLogger().Access(
+ 			r.Context(),
+ 			applog.Int("statusCode", rec.statusCode),
+-			applog.String("req.requestURI", r.RequestURI),
++			applog.String("req.requestURI", r.URL.Path),
+ 			applog.Int("bytesSent", rec.bytesWritten),
+ 			applog.Any("timeTaken", time.Since(start).Seconds()),
+ 			applog.String("req.userAgent", orDash(r.UserAgent())),
+ 			applog.String("req.xForwardedFor", orDash(r.Header.Get("X-Forwarded-For"))),
+-			applog.String("req.referer", orDash(r.Referer())),
+ 			applog.String("req.method", r.Method),
+ 			applog.String("req.remoteHost", remoteHost(r.RemoteAddr)),
+ 		)
+--- a/internal/engine/runtimestores/redisstore/service.go
++++ b/internal/engine/runtimestores/redisstore/service.go
+@@ -76,7 +76,7 @@
+ 		return fmt.Errorf("failed to store in Redis: %w", err)
+ 	}
+ 
+-	r.logger.Debug(ctx, "Stored in Redis", applog.String("key", key))
++	r.logger.Debug(ctx, "Stored in Redis", applog.String("namespace", string(namespace)))
+ 	return nil
+ }
+ 
+@@ -99,7 +99,7 @@
+ 		return false, fmt.Errorf("failed to store in Redis: %w", err)
+ 	}
+ 
+-	r.logger.Debug(ctx, "Stored in Redis", applog.String("key", key))
++	r.logger.Debug(ctx, "Stored in Redis", applog.String("namespace", string(namespace)))
+ 	return ok == "OK", nil
+ }
+ 
+@@ -153,7 +153,7 @@
+ 		return nil, fmt.Errorf("failed to take data from Redis: %w", err)
+ 	}
+ 
+-	r.logger.Debug(ctx, "Taken from Redis", applog.String("key", key))
++	r.logger.Debug(ctx, "Taken from Redis", applog.String("namespace", string(namespace)))
+ 	return data, nil
+ }
+ 
+--- a/internal/engine/runtimestores/inmemory/service.go
++++ b/internal/engine/runtimestores/inmemory/service.go
+@@ -58,7 +58,7 @@
+ 	s.data[s.getFormattedKey(namespace, key)] = e
+ 	s.mu.Unlock()
+ 
+-	s.logger.Debug(ctx, "Stored in memory", applog.String("key", key))
++	s.logger.Debug(ctx, "Stored in memory", applog.String("namespace", string(namespace)))
+ 	return nil
+ }
+ 
+@@ -81,7 +81,7 @@
+ 	s.data[fk] = e
+ 	s.mu.Unlock()
+ 
+-	s.logger.Debug(ctx, "Stored in memory", applog.String("key", key))
++	s.logger.Debug(ctx, "Stored in memory", applog.String("namespace", string(namespace)))
+ 	return true, nil
+ }
+ 
+@@ -141,7 +141,7 @@
+ 		return nil, nil
+ 	}
+ 
+-	s.logger.Debug(ctx, "Taken from memory", applog.String("key", key))
++	s.logger.Debug(ctx, "Taken from memory", applog.String("namespace", string(namespace)))
+ 	return e.value, nil
+ }
+ 
