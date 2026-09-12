@@ -55,7 +55,7 @@
  	"nickname": {}, "gender": {}, "birthdate": {}, "email": {},
  	"phone_number": {}, "picture": {}, "address": {},
 +	// Institution business identifier, distinct from the pairwise OIDC subject.
-+	"person_reference": {},
++	"individual_id": {},
  }
  
  var allowedACRAll = map[string]struct{}{
