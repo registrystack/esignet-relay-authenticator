@@ -21,7 +21,7 @@ type assertionKey struct {
 }
 
 func loadKey(path, kid string) (assertionKey, error) {
-	bad := errors.New("Mint signing key invalid")
+	bad := errors.New("token client signing key invalid")
 	b, e := readBounded(path, 64<<10)
 	if e != nil {
 		return assertionKey{}, bad

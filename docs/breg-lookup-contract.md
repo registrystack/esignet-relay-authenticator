@@ -5,7 +5,7 @@ PostgreSQL directly or substitutes a list/search operation.
 
 ```http
 POST /v1/records/population:lookup?accessProfile=esignet-source&$select=uin,status
-Authorization: Bearer <Mint access token>
+Authorization: Bearer <access token>
 Content-Type: application/json
 Accept: application/json
 
@@ -31,22 +31,23 @@ Authentication, source, audit, timeout and malformed-response failures become a
 generic unavailable result. Classification uses the documented problem code,
 not HTTP status alone. Errors contain no upstream bodies or values.
 
-## Mint client authentication
+## Token client authentication
 
 ```http
 POST /token
 Content-Type: application/x-www-form-urlencoded
 Accept: application/json
 
-grant_type=client_credentials&client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer&client_assertion=<signed assertion>
+grant_type=client_credentials&client_id=esignet-source&client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer&client_assertion=<signed assertion>&resource=urn%3Abreg%3Apopulation&scope=registry.read%20records.lookup
 ```
 
 Assertions carry `iss == sub == client_id`, an exact configured audience,
-bounded `iat` and `exp`, a fresh `jti`, and the registered key's `kid`. Mint
-decides authority from its registration. No scope or client secret is sent.
-The default audience is the token endpoint; an explicit audience supports a
-native development issuer reached through a container gateway.
+bounded `iat` and `exp`, a fresh `jti`, and the registered key's `kid`. The
+issuer decides authority from its registration and the explicit resource and
+scope parameters. The provider sends no client secret and performs no issuer
+discovery. Token endpoint, assertion audience, client identity, key identity,
+resource, and scopes remain fixed for the lifetime of the provider.
 
-Cache expiry is measured from acquisition start and bounded by both Mint's
+Cache expiry is measured from acquisition start and bounded by both the issuer's
 `expires_in` and the configured maximum. Authentication rejection invalidates
 the cache for the next operation without retrying the current lookup.

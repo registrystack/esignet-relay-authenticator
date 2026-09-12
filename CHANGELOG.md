@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Replace the Registry Mint-specific client configuration with an
+  issuer-neutral `token_client` using explicit assertion audience, resource,
+  scopes, client identity, and key identity. The retired `mint` key is rejected
+  rather than aliased.
+
 ## 0.3.0 (2026-09-09)
 
 This breaking release replaces the unused Java/Maven authenticator with a

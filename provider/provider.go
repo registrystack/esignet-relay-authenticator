@@ -46,6 +46,7 @@ func New(c Config, options ...Option) (*Provider, error) {
 	c.ClaimMap = m
 	c.BREG.ProvisionedFields = append([]string(nil), c.BREG.ProvisionedFields...)
 	c.BREG.AccountCheckFields = append([]string(nil), c.BREG.AccountCheckFields...)
+	c.TokenClient.Scopes = append([]string(nil), c.TokenClient.Scopes...)
 	p := &Provider{config: c, now: time.Now}
 	for _, o := range options {
 		if o != nil {
@@ -67,7 +68,7 @@ func New(c Config, options ...Option) (*Provider, error) {
 	if e != nil || len(p.secret) < 32 {
 		return nil, errors.New("PSUT secret file must contain at least 32 bytes")
 	}
-	p.key, e = loadKey(c.Mint.PrivateKeyFile, c.Mint.KeyID)
+	p.key, e = loadKey(c.TokenClient.PrivateKeyFile, c.TokenClient.KeyID)
 	if e != nil {
 		clear(p.secret)
 		return nil, e

@@ -20,7 +20,7 @@ metadata is rejected.
 The patch registers the BREG authentication provider and applies fresh consent to
 BREG sign-ins. It also adds exactly two names to the host's static client claim
 allowlist: standard OIDC `family_name` and institution business claim
-`individual_id`. The latter supports institution applications that require an
+`person_reference`. The latter supports institution applications that require an
 explicitly requested and consented business identifier. It does not replace the
 pairwise OIDC `sub`. Registration still rejects arbitrary claim names; configuring
 either added claim does not release its value without the provider mapping and
