@@ -29,12 +29,12 @@ done
 source_args=("$repo_root")
 dockerfile="$repo_root/Dockerfile"
 archive="$repo_root/dist/esignet-breg-candidate.oci.tar"
-candidate_image=${CANDIDATE_IMAGE:-esignet-relay-authenticator:0.4.0-candidate}
+candidate_image=${CANDIDATE_IMAGE:-esignet-relay-authenticator:0.5.0-candidate}
 if [[ "$ui" == true ]]; then
   source_args+=(--ui)
   dockerfile="$repo_root/ui/Dockerfile"
   archive="$repo_root/dist/esignet-ui-candidate.oci.tar"
-  candidate_image=${CANDIDATE_IMAGE:-esignet-oidc-ui:0.4.0-candidate}
+  candidate_image=${CANDIDATE_IMAGE:-esignet-oidc-ui:0.5.0-candidate}
 fi
 if [[ "$load" == true ]]; then
   [[ "$(docker info --format '{{.OSType}}')" == linux ]] || { echo "A Linux Docker daemon is required" >&2; exit 1; }
@@ -53,7 +53,7 @@ if [[ "$ui" == true ]]; then
   metadata_args+=(--build-arg "ESIGNET_COMMIT=$ESIGNET_COMMIT"
     --build-arg "ESIGNET_ARCHIVE_URL=$ESIGNET_ARCHIVE_URL"
     --build-arg "ESIGNET_ARCHIVE_SHA256=$ESIGNET_ARCHIVE_SHA256"
-    --build-arg "CANDIDATE_VERSION=0.4.0")
+    --build-arg "CANDIDATE_VERSION=0.5.0")
 fi
 verify_source_unchanged() {
   local current_sha unused_revision unused_state

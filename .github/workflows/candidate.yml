@@ -29,7 +29,7 @@ jobs:
           ./integration/build.sh --ui
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: esignet-breg-0.4.0-candidate
+          name: esignet-breg-0.5.0-candidate
           path: dist/
           if-no-files-found: error
           retention-days: 7

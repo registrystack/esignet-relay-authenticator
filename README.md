@@ -29,15 +29,16 @@ artifacts, but their configuration is not accepted here.
 
 ## Release image
 
-The release workflow publishes version 0.4.0 as
-`ghcr.io/registrystack/esignet-relay-authenticator:0.4.0` for Linux amd64 and arm64.
+The release workflow publishes version 0.5.0 as
+`ghcr.io/registrystack/esignet-relay-authenticator:0.5.0` for Linux amd64 and arm64.
 Use the exact index digest from the release metadata for deployment pins. The
 GitHub release also includes the OCI archive, checksums, and source metadata.
 See [release verification](docs/release.md) before deploying.
 
 The optional [companion OIDC UI](ui/README.md) uses the same pinned eSignet
-source and a same-origin proxy for public identity routes. It is currently a
-source candidate and was not included in v0.4.0.
+source and a same-origin proxy for public identity routes. Version 0.5.0 adds
+`ghcr.io/registrystack/esignet-oidc-ui:0.5.0` as a separate image and OCI archive.
+Both components share the release's source revision; pin each by its own digest.
 
 ## Build and check
 
@@ -53,7 +54,7 @@ GOTOOLCHAIN=go1.26.8 go vet ./...
 Core tests use HTTP fixtures. Integration checks compile the adapter against
 pinned eSignet and Thunder source. The image builder writes both Linux amd64 and
 arm64 variants to `dist/esignet-breg-candidate.oci.tar`, tagged
-`esignet-relay-authenticator:0.4.0-candidate`. It does not push images or create a
+`esignet-relay-authenticator:0.5.0-candidate`. It does not push images or create a
 release. Inspect `integration/upstream.env` for exact source and image pins.
 
 See [configuration](docs/esignet-configuration.md), the

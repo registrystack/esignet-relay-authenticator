@@ -1,4 +1,4 @@
-name: Release v0.4.0
+name: Release v0.5.0
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-v0.4.0
+  group: release-v0.5.0
   cancel-in-progress: false
 
 jobs:
@@ -23,11 +23,11 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: registrystack/esignet-relay-authenticator
-      RELEASE_TAG: v0.4.0
-      RELEASE_IMAGE: ghcr.io/registrystack/esignet-relay-authenticator:0.4.0
+      RELEASE_TAG: v0.5.0
+      RELEASE_IMAGE: ghcr.io/registrystack/esignet-relay-authenticator:0.5.0
       ARCHIVE: dist/esignet-breg-candidate.oci.tar
       UI_ARCHIVE: dist/esignet-ui-candidate.oci.tar
-      UI_RELEASE_IMAGE: ghcr.io/registrystack/esignet-oidc-ui:0.4.0
+      UI_RELEASE_IMAGE: ghcr.io/registrystack/esignet-oidc-ui:0.5.0
     steps:
       - name: Require the canonical main branch
         run: |
@@ -149,12 +149,12 @@ jobs:
       - name: Smoke-test the exact archive with invalid configuration
         run: |
           skopeo --override-os linux --override-arch amd64 copy \
-            "oci-archive:$PWD/$ARCHIVE" docker-daemon:esignet-release-smoke:0.4.0
+            "oci-archive:$PWD/$ARCHIVE" docker-daemon:esignet-release-smoke:0.5.0
           status=0
           docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges \
             -e MOSIP_ESIGNET_OAUTH_AUTH_CODE_LIFETIME_SECONDS=invalid \
-            esignet-release-smoke:0.4.0 > "$RUNNER_TEMP/startup-smoke.log" 2>&1 || status=$?
+            esignet-release-smoke:0.5.0 > "$RUNNER_TEMP/startup-smoke.log" 2>&1 || status=$?
           test "$status" -eq 1
           grep -Fq 'failed to load app config' "$RUNNER_TEMP/startup-smoke.log"
           grep -Fq 'invalid MOSIP_ESIGNET_OAUTH_AUTH_CODE_LIFETIME_SECONDS' "$RUNNER_TEMP/startup-smoke.log"
@@ -162,8 +162,8 @@ jobs:
       - name: Smoke-test the exact UI archive
         run: |
           skopeo --override-os linux --override-arch amd64 copy \
-            "oci-archive:$PWD/$UI_ARCHIVE" docker-daemon:esignet-ui-release-smoke:0.4.0
-          ./ui/smoke.sh esignet-ui-release-smoke:0.4.0
+            "oci-archive:$PWD/$UI_ARCHIVE" docker-daemon:esignet-ui-release-smoke:0.5.0
+          ./ui/smoke.sh esignet-ui-release-smoke:0.5.0
       - name: Audit locked UI production dependencies
         run: ./integration/audit-ui.sh
       - name: Attest release archive and sidecars
@@ -178,7 +178,7 @@ jobs:
       - name: Retain the exact release bytes for recovery
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: esignet-v0.4.0-${{ github.sha }}
+          name: esignet-v0.5.0-${{ github.sha }}
           path: dist/
           if-no-files-found: error
           retention-days: 30

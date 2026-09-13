@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-09-14)
 
 - Add an optional companion OIDC UI image from the same pinned eSignet source,
   with an English default, reviewed dependency updates, upstream notices and a
