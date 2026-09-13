@@ -46,7 +46,7 @@ attestations. It never pushes an image. The Dockerfile retains the original
 upstream license and third-party notices under `/licenses/esignet`.
 
 For a native local image, run `./integration/build.sh --load`. This loads
-`esignet-relay-authenticator:0.3.0-candidate` into the current Linux Docker daemon
+`esignet-relay-authenticator:0.4.0-candidate` into the current Linux Docker daemon
 without changing any running service. Use `--help` for the two output modes.
 
 The build wrapper uses Python 3 to compute a deterministic SHA-256 over the

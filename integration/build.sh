@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
-candidate_image=${CANDIDATE_IMAGE:-esignet-relay-authenticator:0.3.0-candidate}
+candidate_image=${CANDIDATE_IMAGE:-esignet-relay-authenticator:0.4.0-candidate}
 usage() {
   cat <<'EOF'
 Usage: integration/build.sh [--load | --help]
@@ -9,7 +9,7 @@ Usage: integration/build.sh [--load | --help]
 Default: export Linux amd64 and arm64 images, SBOM, and provenance to
          dist/esignet-breg-candidate.oci.tar.
 --load:  build and load the Docker daemon's native Linux architecture as
-         esignet-relay-authenticator:0.3.0-candidate for an isolated local demo.
+         esignet-relay-authenticator:0.4.0-candidate for an isolated local demo.
 --help:  show this help.
 
 Both modes use the same pinned Dockerfile and verified upstream source.
