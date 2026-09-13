@@ -26,6 +26,8 @@ jobs:
       RELEASE_TAG: v0.4.0
       RELEASE_IMAGE: ghcr.io/registrystack/esignet-relay-authenticator:0.4.0
       ARCHIVE: dist/esignet-breg-candidate.oci.tar
+      UI_ARCHIVE: dist/esignet-ui-candidate.oci.tar
+      UI_RELEASE_IMAGE: ghcr.io/registrystack/esignet-oidc-ui:0.4.0
     steps:
       - name: Require the canonical main branch
         run: |
@@ -67,16 +69,17 @@ jobs:
           for endpoint in (f'git/ref/tags/{tag}', f'releases/tags/{tag}'):
               if request(f'repos/{repo}/{endpoint}', allow_missing=True) is not None:
                   raise SystemExit('Release identity already exists; inspect and recover the original run')
-          page = 1
-          while True:
-              versions = request(f'orgs/registrystack/packages/container/esignet-relay-authenticator/versions?per_page=100&page={page}', allow_missing=True)
-              if versions is None:
-                  break
-              if any('0.4.0' in version['metadata']['container']['tags'] for version in versions):
-                  raise SystemExit('Container version already exists; overwriting is forbidden')
-              if len(versions) < 100:
-                  break
-              page += 1
+          for package in ('esignet-relay-authenticator', 'esignet-oidc-ui'):
+              page = 1
+              while True:
+                  versions = request(f'orgs/registrystack/packages/container/{package}/versions?per_page=100&page={page}', allow_missing=True)
+                  if versions is None:
+                      break
+                  if any(tag.removeprefix('v') in version['metadata']['container']['tags'] for version in versions):
+                      raise SystemExit('Container version already exists; overwriting is forbidden: ' + package)
+                  if len(versions) < 100:
+                      break
+                  page += 1
           print('Exact main CI passed; release identities are unused')
           PY
           python3 "$RUNNER_TEMP/release-preflight.py"
@@ -103,10 +106,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends skopeo
       - name: Build the release archive once
-        run: ./integration/build.sh
+        run: |
+          ./integration/build.sh
+          ./integration/build.sh --ui
       - name: Verify release source and OCI contents
         run: |
-          (cd dist && sha256sum --check esignet-breg-candidate.oci.tar.sha256)
+          (cd dist && sha256sum --check esignet-breg-candidate.oci.tar.sha256 esignet-ui-candidate.oci.tar.sha256)
           python3 - <<'PY'
           import hashlib
           import json
@@ -114,30 +119,31 @@ jobs:
           import tarfile
           from pathlib import Path
 
-          archive = Path(os.environ['ARCHIVE'])
-          metadata = json.loads(Path(str(archive) + '.metadata.json').read_text())
-          labels = metadata['labels']
-          expected = {
-              'org.opencontainers.image.source': 'https://github.com/' + os.environ['GH_REPO'],
-              'org.opencontainers.image.version': '0.4.0',
-              'org.opencontainers.image.revision': os.environ['GITHUB_SHA'],
-              'io.registry.source.state': 'clean',
-          }
-          for key, value in expected.items():
-              if labels.get(key) != value:
-                  raise SystemExit('Release label mismatch: ' + key)
-          # Check every archived blob, including image layers and attestations.
-          with tarfile.open(archive) as image:
-              for member in image.getmembers():
-                  if member.isfile() and member.name.startswith('blobs/sha256/'):
-                      digest = hashlib.sha256()
-                      with image.extractfile(member) as stream:
-                          for chunk in iter(lambda: stream.read(1 << 20), b''):
-                              digest.update(chunk)
-                      if digest.hexdigest() != member.name.removeprefix('blobs/sha256/'):
-                          raise SystemExit('OCI blob digest mismatch')
-          with open(os.environ['GITHUB_ENV'], 'a') as output:
-              output.write('RELEASE_DIGEST=' + metadata['image_index_digest'] + '\n')
+          for archive_variable, digest_variable in (('ARCHIVE', 'RELEASE_DIGEST'), ('UI_ARCHIVE', 'UI_RELEASE_DIGEST')):
+              archive = Path(os.environ[archive_variable])
+              metadata = json.loads(Path(str(archive) + '.metadata.json').read_text())
+              labels = metadata['labels']
+              expected = {
+                  'org.opencontainers.image.source': 'https://github.com/' + os.environ['GH_REPO'],
+                  'org.opencontainers.image.version': os.environ['RELEASE_TAG'].removeprefix('v'),
+                  'org.opencontainers.image.revision': os.environ['GITHUB_SHA'],
+                  'io.registry.source.state': 'clean',
+              }
+              for key, value in expected.items():
+                  if labels.get(key) != value:
+                      raise SystemExit('Release label mismatch: ' + key)
+              # Check every archived blob, including image layers and attestations.
+              with tarfile.open(archive) as image:
+                  for member in image.getmembers():
+                      if member.isfile() and member.name.startswith('blobs/sha256/'):
+                          digest = hashlib.sha256()
+                          with image.extractfile(member) as stream:
+                              for chunk in iter(lambda: stream.read(1 << 20), b''):
+                                  digest.update(chunk)
+                          if digest.hexdigest() != member.name.removeprefix('blobs/sha256/'):
+                              raise SystemExit('OCI blob digest mismatch')
+              with open(os.environ['GITHUB_ENV'], 'a') as output:
+                  output.write(digest_variable + '=' + metadata['image_index_digest'] + '\n')
           PY
           test -z "$(git status --porcelain)"
       - name: Smoke-test the exact archive with invalid configuration
@@ -153,6 +159,13 @@ jobs:
           grep -Fq 'failed to load app config' "$RUNNER_TEMP/startup-smoke.log"
           grep -Fq 'invalid MOSIP_ESIGNET_OAUTH_AUTH_CODE_LIFETIME_SECONDS' "$RUNNER_TEMP/startup-smoke.log"
           echo 'Native image starts and rejects invalid configuration before connecting to services'
+      - name: Smoke-test the exact UI archive
+        run: |
+          skopeo --override-os linux --override-arch amd64 copy \
+            "oci-archive:$PWD/$UI_ARCHIVE" docker-daemon:esignet-ui-release-smoke:0.4.0
+          ./ui/smoke.sh esignet-ui-release-smoke:0.4.0
+      - name: Audit locked UI production dependencies
+        run: ./integration/audit-ui.sh
       - name: Attest release archive and sidecars
         id: attest
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
@@ -177,27 +190,37 @@ jobs:
           skopeo inspect --raw "docker://$RELEASE_IMAGE" > "$RUNNER_TEMP/published-index.json"
           actual_digest="sha256:$(sha256sum "$RUNNER_TEMP/published-index.json" | cut -d ' ' -f 1)"
           test "$actual_digest" = "$RELEASE_DIGEST"
+          skopeo copy --all --preserve-digests "oci-archive:$PWD/$UI_ARCHIVE" "docker://$UI_RELEASE_IMAGE"
+          skopeo inspect --raw "docker://$UI_RELEASE_IMAGE" > "$RUNNER_TEMP/published-ui-index.json"
+          actual_ui_digest="sha256:$(sha256sum "$RUNNER_TEMP/published-ui-index.json" | cut -d ' ' -f 1)"
+          test "$actual_ui_digest" = "$UI_RELEASE_DIGEST"
       - name: Tag the exact source and publish the release assets
         run: |
           gh api --method POST "repos/$GH_REPO/git/refs" \
             -f ref="refs/tags/$RELEASE_TAG" -f sha="$GITHUB_SHA" > /dev/null
           cat > "$RUNNER_TEMP/release-notes.md" <<EOF_NOTES
           Native Go BREG authentication provider for pinned eSignet 2.0.0-beta.1.
-          This release replaces Mint-specific credentials with an issuer-neutral token_client.
-          Migrate the former mint configuration before upgrading; see README and CHANGELOG.
-          It also adds an opt-in, transaction-bound synthetic Mailpit challenge verifier.
+          Adds an optional companion UI built from the same pinned eSignet source.
+          The provider retains issuer-neutral token_client credentials and the opt-in,
+          transaction-bound synthetic Mailpit verifier introduced in v0.4.0.
+          See README and CHANGELOG when upgrading from earlier versions.
           Production OTP delivery remains outside this provider artifact.
 
           Source: $GITHUB_SHA
           Image: $RELEASE_IMAGE
           OCI index: $RELEASE_DIGEST
+          Companion UI: $UI_RELEASE_IMAGE
+          UI OCI index: $UI_RELEASE_DIGEST
 
-          The OCI archive contains Linux amd64 and arm64 images, SBOMs, and build provenance.
+          Both OCI archives contain Linux amd64 and arm64 images, SBOMs, and build provenance.
+          The companion UI uses the same pinned upstream source, reviewed dependency fixes,
+          and a same-origin proxy limited to public identity routes.
           Verify the archive checksum and GitHub artifact attestation before importing it.
           Publication and verification commands are in docs/release.md at this tag.
           EOF_NOTES
           gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" \
             --notes-file "$RUNNER_TEMP/release-notes.md" \
-            "$ARCHIVE" "$ARCHIVE.sha256" "$ARCHIVE.metadata.json" dist/attestation.intoto.jsonl
+            "$ARCHIVE" "$ARCHIVE.sha256" "$ARCHIVE.metadata.json" \
+            "$UI_ARCHIVE" "$UI_ARCHIVE.sha256" "$UI_ARCHIVE.metadata.json" dist/attestation.intoto.jsonl
           gh release edit "$RELEASE_TAG" --draft=false
-          printf 'Released source `%s` as `%s@%s`.\n' "$GITHUB_SHA" "${RELEASE_IMAGE%:*}" "$RELEASE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Released source `%s` as `%s@%s` and `%s@%s`.\n' "$GITHUB_SHA" "${RELEASE_IMAGE%:*}" "$RELEASE_DIGEST" "${UI_RELEASE_IMAGE%:*}" "$UI_RELEASE_DIGEST" >> "$GITHUB_STEP_SUMMARY"

@@ -35,6 +35,10 @@ Use the exact index digest from the release metadata for deployment pins. The
 GitHub release also includes the OCI archive, checksums, and source metadata.
 See [release verification](docs/release.md) before deploying.
 
+The optional [companion OIDC UI](ui/README.md) uses the same pinned eSignet
+source and a same-origin proxy for public identity routes. It is currently a
+source candidate and was not included in v0.4.0.
+
 ## Build and check
 
 ```sh

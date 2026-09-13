@@ -6,3 +6,5 @@
 !provider/**
 !integration/
 !integration/**
+!ui/
+!ui/**

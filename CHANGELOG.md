@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Add an optional companion OIDC UI image from the same pinned eSignet source,
+  with an English default, reviewed dependency updates, upstream notices and a
+  same-origin proxy restricted to public identity routes. The nonroot runtime
+  excludes plugin downloads and query values from access logs.
+- Extend candidate and release exports with a separate UI OCI archive, source
+  metadata, checksum and attestation. Verify UI routing and the locked production
+  dependencies before publication.
+
 ## 0.4.0 (2026-09-14)
 
 - Replace the Registry Mint-specific client configuration with an
