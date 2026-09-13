@@ -78,10 +78,12 @@ See [configuration](docs/esignet-configuration.md), the
   size and do not follow redirects.
 
 The Go `provider.ChallengeVerifier` interface is the production extension seam.
-The bundled static OTP verifier is **synthetic-demo only**, requires explicit
-configuration and a mounted OTP file, and is disabled by default. A deployment
-without a configured verifier fails startup. This repository does not implement
-production OTP delivery, enrollment, signup, wallet login or identity assurance.
+The bundled static OTP and local Mailpit verifiers are **synthetic-demo only**,
+mutually exclusive and disabled by default. Mailpit delivers a generated,
+transaction-bound one-time code to a fixed synthetic inbox. A deployment without
+a configured verifier fails startup. See [configuration](docs/esignet-configuration.md)
+for the bounded local flow. This repository does not implement production OTP
+delivery, enrollment, signup, wallet login or identity assurance.
 
 The adapter supplies structured attributes to eSignet, which applies the
 client's UserInfo response mode. There is no provider signing key, certificate

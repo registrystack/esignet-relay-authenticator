@@ -54,14 +54,17 @@ func New(c Config, options ...Option) (*Provider, error) {
 		}
 	}
 	if p.verifier == nil {
-		if !c.Demo.StaticOTPEnabled {
+		if c.Demo.Mailpit.Enabled {
+			p.verifier = newMailpitVerifier(c.Demo.Mailpit, time.Duration(c.HTTP.TimeoutSeconds)*time.Second)
+		} else if !c.Demo.StaticOTPEnabled {
 			return nil, errors.New("production challenge verifier required")
+		} else {
+			otp, e := readBounded(c.Demo.StaticOTPFile, 1024)
+			if e != nil || len(bytes.TrimSpace(otp)) == 0 {
+				return nil, errors.New("demo OTP file invalid")
+			}
+			p.verifier = &staticVerifier{otp: bytes.TrimSpace(otp)}
 		}
-		otp, e := readBounded(c.Demo.StaticOTPFile, 1024)
-		if e != nil || len(bytes.TrimSpace(otp)) == 0 {
-			return nil, errors.New("demo OTP file invalid")
-		}
-		p.verifier = &staticVerifier{otp: bytes.TrimSpace(otp)}
 	}
 	var e error
 	p.secret, e = readBounded(c.PSUTSecretFile, 4096)
@@ -150,7 +153,12 @@ func (p *Provider) SendOTP(ctx context.Context, r OTPRequest) error {
 	}
 	return nil
 }
-func (p *Provider) SupportedOTPChannels() []string { return []string{"email", "phone"} }
+func (p *Provider) SupportedOTPChannels() []string {
+	if p.config.Demo.Mailpit.Enabled {
+		return []string{"email"}
+	}
+	return []string{"email", "phone"}
+}
 func (p *Provider) SupportedClaims() []string {
 	claims := []string{}
 	for k, v := range p.config.ClaimMap {
