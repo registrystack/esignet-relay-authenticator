@@ -29,11 +29,14 @@ status() { curl -sS --max-time 3 -o /dev/null -w '%{http_code}' "$origin$1"; }
 
 ready=false
 for _attempt in {1..30}; do
-  if [[ "$(status / 2>/dev/null || true)" == 200 ]]; then ready=true; break; fi
+  if [[ "$(status / 2>/dev/null || true)" == 200 ]] &&
+     [[ "$(status /.well-known/openid-configuration 2>/dev/null || true)" == 418 ]]; then
+    ready=true
+    break
+  fi
   sleep 0.2
 done
-[[ "$ready" == true ]] || { echo 'UI did not serve its static page' >&2; exit 1; }
-[[ "$(status '/.well-known/openid-configuration')" == 418 ]] || { echo 'Public OIDC route did not proxy' >&2; exit 1; }
+[[ "$ready" == true ]] || { echo 'UI static page or public OIDC proxy did not become ready' >&2; exit 1; }
 for path in /client-mgmt/client /system-info /v1/esignet/client-mgmt /admin; do
   [[ "$(status "$path")" == 404 ]] || { echo 'Private route was exposed' >&2; exit 1; }
 done
