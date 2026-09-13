@@ -27,10 +27,10 @@ build. Upgrading eSignet requires reviewing that patch and rerunning the
 composition tests. Existing Java releases remain in Git history and published
 artifacts, but their configuration is not accepted here.
 
-## Published image
+## Release image
 
-Version 0.3.0 is distributed as
-`ghcr.io/registrystack/esignet-relay-authenticator:0.3.0` for Linux amd64 and arm64.
+The release workflow publishes version 0.4.0 as
+`ghcr.io/registrystack/esignet-relay-authenticator:0.4.0` for Linux amd64 and arm64.
 Use the exact index digest from the release metadata for deployment pins. The
 GitHub release also includes the OCI archive, checksums, and source metadata.
 See [release verification](docs/release.md) before deploying.
@@ -49,7 +49,7 @@ GOTOOLCHAIN=go1.26.8 go vet ./...
 Core tests use HTTP fixtures. Integration checks compile the adapter against
 pinned eSignet and Thunder source. The image builder writes both Linux amd64 and
 arm64 variants to `dist/esignet-breg-candidate.oci.tar`, tagged
-`esignet-relay-authenticator:0.3.0-candidate`. It does not push images or create a
+`esignet-relay-authenticator:0.4.0-candidate`. It does not push images or create a
 release. Inspect `integration/upstream.env` for exact source and image pins.
 
 See [configuration](docs/esignet-configuration.md), the

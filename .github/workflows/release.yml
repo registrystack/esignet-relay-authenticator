@@ -1,4 +1,4 @@
-name: Release v0.3.0
+name: Release v0.4.0
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-v0.3.0
+  group: release-v0.4.0
   cancel-in-progress: false
 
 jobs:
@@ -23,8 +23,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: registrystack/esignet-relay-authenticator
-      RELEASE_TAG: v0.3.0
-      RELEASE_IMAGE: ghcr.io/registrystack/esignet-relay-authenticator:0.3.0
+      RELEASE_TAG: v0.4.0
+      RELEASE_IMAGE: ghcr.io/registrystack/esignet-relay-authenticator:0.4.0
       ARCHIVE: dist/esignet-breg-candidate.oci.tar
     steps:
       - name: Require the canonical main branch
@@ -72,7 +72,7 @@ jobs:
               versions = request(f'orgs/registrystack/packages/container/esignet-relay-authenticator/versions?per_page=100&page={page}', allow_missing=True)
               if versions is None:
                   break
-              if any('0.3.0' in version['metadata']['container']['tags'] for version in versions):
+              if any('0.4.0' in version['metadata']['container']['tags'] for version in versions):
                   raise SystemExit('Container version already exists; overwriting is forbidden')
               if len(versions) < 100:
                   break
@@ -119,7 +119,7 @@ jobs:
           labels = metadata['labels']
           expected = {
               'org.opencontainers.image.source': 'https://github.com/' + os.environ['GH_REPO'],
-              'org.opencontainers.image.version': '0.3.0',
+              'org.opencontainers.image.version': '0.4.0',
               'org.opencontainers.image.revision': os.environ['GITHUB_SHA'],
               'io.registry.source.state': 'clean',
           }
@@ -143,12 +143,12 @@ jobs:
       - name: Smoke-test the exact archive with invalid configuration
         run: |
           skopeo --override-os linux --override-arch amd64 copy \
-            "oci-archive:$PWD/$ARCHIVE" docker-daemon:esignet-release-smoke:0.3.0
+            "oci-archive:$PWD/$ARCHIVE" docker-daemon:esignet-release-smoke:0.4.0
           status=0
           docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges \
             -e MOSIP_ESIGNET_OAUTH_AUTH_CODE_LIFETIME_SECONDS=invalid \
-            esignet-release-smoke:0.3.0 > "$RUNNER_TEMP/startup-smoke.log" 2>&1 || status=$?
+            esignet-release-smoke:0.4.0 > "$RUNNER_TEMP/startup-smoke.log" 2>&1 || status=$?
           test "$status" -eq 1
           grep -Fq 'failed to load app config' "$RUNNER_TEMP/startup-smoke.log"
           grep -Fq 'invalid MOSIP_ESIGNET_OAUTH_AUTH_CODE_LIFETIME_SECONDS' "$RUNNER_TEMP/startup-smoke.log"
@@ -165,7 +165,7 @@ jobs:
       - name: Retain the exact release bytes for recovery
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: esignet-v0.3.0-${{ github.sha }}
+          name: esignet-v0.4.0-${{ github.sha }}
           path: dist/
           if-no-files-found: error
           retention-days: 30
@@ -183,7 +183,10 @@ jobs:
             -f ref="refs/tags/$RELEASE_TAG" -f sha="$GITHUB_SHA" > /dev/null
           cat > "$RUNNER_TEMP/release-notes.md" <<EOF_NOTES
           Native Go BREG authentication provider for pinned eSignet 2.0.0-beta.1.
-          This replaces the Java plugin and requires migration; see the repository README and CHANGELOG.
+          This release replaces Mint-specific credentials with an issuer-neutral token_client.
+          Migrate the former mint configuration before upgrading; see README and CHANGELOG.
+          It also adds an opt-in, transaction-bound synthetic Mailpit challenge verifier.
+          Production OTP delivery remains outside this provider artifact.
 
           Source: $GITHUB_SHA
           Image: $RELEASE_IMAGE

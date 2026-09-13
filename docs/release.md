@@ -1,6 +1,6 @@
-# Release v0.3.0
+# Release v0.4.0
 
-The manually dispatched **Release v0.3.0** workflow publishes the native Go BREG provider to `ghcr.io/registrystack/esignet-relay-authenticator:0.3.0` and creates the GitHub release and source tag `v0.3.0`. It does not publish a `latest` image tag or change a deployment.
+The manually dispatched **Release v0.4.0** workflow publishes the native Go BREG provider to `ghcr.io/registrystack/esignet-relay-authenticator:0.4.0` and creates the GitHub release and source tag `v0.4.0`. It does not publish a `latest` image tag or change a deployment.
 
 Merge the release changes into `main` and wait for the **CI** push run on that exact commit to succeed. Then dispatch the workflow from `main`:
 
@@ -22,7 +22,7 @@ GitHub authenticates an artifact attestation over the archive and its checksum a
 Download the four release assets into an empty directory:
 
 ```sh
-gh release download v0.3.0 --repo registrystack/esignet-relay-authenticator
+gh release download v0.4.0 --repo registrystack/esignet-relay-authenticator
 sha256sum --check esignet-breg-candidate.oci.tar.sha256
 for artifact in esignet-breg-candidate.oci.tar esignet-breg-candidate.oci.tar.metadata.json; do
   gh attestation verify "$artifact" \
@@ -36,7 +36,7 @@ done
 The historical `candidate` filename is retained as the build export name. The image version label and source revision in `esignet-breg-candidate.oci.tar.metadata.json` identify the released version. Use its `image_index_digest` to pin a deployment or compare the registry identity:
 
 ```sh
-skopeo inspect --raw docker://ghcr.io/registrystack/esignet-relay-authenticator:0.3.0 > published-index.json
+skopeo inspect --raw docker://ghcr.io/registrystack/esignet-relay-authenticator:0.4.0 > published-index.json
 printf 'sha256:'; sha256sum published-index.json
 ```
 
@@ -50,4 +50,4 @@ An existing version causes a new run to fail, including after a partially comple
 
 Inspect the original run, its retained archive and attestation, the Git tag target, any draft release, and the published image digest. Resume only missing publication steps using the original verified bytes when every existing identity and checksum agrees with the original source and metadata. A matching draft can be completed by uploading only missing assets and publishing it. Do not use `--clobber`. If the image exists but the tag does not, first verify its exact index digest against the retained metadata before creating the tag at the original source commit.
 
-If any published identity or bytes differ, fix forward under a new version. If the original artifact cannot be recovered and verified, do not manufacture replacement bytes for v0.3.0. The run artifact is retained for 30 days; published release assets and the authenticated bundle are the durable distribution record.
+If any published identity or bytes differ, fix forward under a new version. If the original artifact cannot be recovered and verified, do not manufacture replacement bytes for v0.4.0. The run artifact is retained for 30 days; published release assets and the authenticated bundle are the durable distribution record.

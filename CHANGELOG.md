@@ -1,11 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-09-14)
 
 - Replace the Registry Mint-specific client configuration with an
   issuer-neutral `token_client` using explicit assertion audience, resource,
   scopes, client identity, and key identity. The retired `mint` key is rejected
   rather than aliased.
+- Add an opt-in synthetic Mailpit challenge verifier through the existing
+  challenge interface. Challenges are bound to the identifier and transaction,
+  expire after five minutes, permit at most five attempts, and cannot be reused.
+  The pending challenge store is bounded; stored codes are hashed. The verifier
+  is disabled by default and does not supply production OTP delivery.
+
+Migrate the former `mint` configuration to `token_client` before upgrading.
+The governed BREG lookup, subject continuity and consent contracts are unchanged.
 
 ## 0.3.0 (2026-09-09)
 
