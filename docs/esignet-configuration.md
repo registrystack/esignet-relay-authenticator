@@ -99,6 +99,30 @@ It proves flow composition only, not the identity of a person. Solmara's
 fictional fixtures use this mode explicitly. Enrollment, signup, password,
 biometrics and wallet authentication are not exposed by this integration.
 
+For a local Mailpit flow, replace the static mode with:
+
+```yaml
+demo:
+  mailpit:
+    enabled: true
+    smtp_address: mailpit:1025
+    sender: esignet-demo@example.test
+    recipient: synthetic-inbox@example.test
+```
+
+Start Mailpit on the same local compose network and open its inbox UI to read
+the delivered six-digit code. The SMTP address accepts only `mailpit`,
+`localhost`, or an IP loopback address with an explicit port. The recipient is
+one fixed synthetic inbox, never derived from the person's identifier or BREG
+attributes. Only email is advertised. Codes expire in five minutes, allow at
+most five wrong attempts, and are consumed on success. They bind the exact
+identifier/type, relying party, client and transaction. The process retains at
+most 1024 pending or sending challenges and loses them on restart. SMTP delivery
+failure creates no new challenge. This mode uses unencrypted local SMTP and cannot
+establish ownership of a real email address or a person's identity. Keep it
+restricted to synthetic local demonstrations; a production integration supplies
+its own `ChallengeVerifier`.
+
 ## eSignet configuration
 
 Use the supplied `flow-breg-otp` flow. It includes OTP initiation/verification,

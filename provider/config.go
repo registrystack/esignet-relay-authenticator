@@ -48,8 +48,15 @@ type HTTPConfig struct {
 	CAFile            string `yaml:"ca_file"`
 }
 type DemoConfig struct {
-	StaticOTPEnabled bool   `yaml:"static_otp_enabled"`
-	StaticOTPFile    string `yaml:"static_otp_file"`
+	StaticOTPEnabled bool          `yaml:"static_otp_enabled"`
+	StaticOTPFile    string        `yaml:"static_otp_file"`
+	Mailpit          MailpitConfig `yaml:"mailpit"`
+}
+type MailpitConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	SMTPAddress string `yaml:"smtp_address"`
+	Sender      string `yaml:"sender"`
+	Recipient   string `yaml:"recipient"`
 }
 
 func LoadConfigFromEnv() (Config, error) {
@@ -131,6 +138,12 @@ func (c Config) validate() error {
 	check(c.HTTP.TimeoutSeconds >= 1 && c.HTTP.TimeoutSeconds <= 120, "http.timeout_seconds")
 	check(c.HTTP.MaxResponseBytes >= 1 && c.HTTP.MaxResponseBytes <= 16<<20, "http.max_response_bytes")
 	check(!c.Demo.StaticOTPEnabled || !blank(c.Demo.StaticOTPFile), "demo.static_otp_file")
+	check(!c.Demo.StaticOTPEnabled || !c.Demo.Mailpit.Enabled, "demo.challenge_mode")
+	if c.Demo.Mailpit.Enabled {
+		check(validMailpitAddress(c.Demo.Mailpit.SMTPAddress), "demo.mailpit.smtp_address")
+		check(validMailAddress(c.Demo.Mailpit.Sender), "demo.mailpit.sender")
+		check(validMailAddress(c.Demo.Mailpit.Recipient), "demo.mailpit.recipient")
+	}
 	check(len(c.BREG.ProvisionedFields) > 0, "breg.provisioned_fields")
 	for _, s := range c.BREG.ProvisionedFields {
 		if !validField(s) {
