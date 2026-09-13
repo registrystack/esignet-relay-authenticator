@@ -30,6 +30,7 @@ LABEL org.opencontainers.image.source="https://github.com/registrystack/esignet-
       io.registry.esignet.version="2.0.0-beta.1" \
       io.registry.esignet.ui.lock.sha256="bf4336641b4a07f3b1e5ad282db9753d5fd3171bbf5ff0268bab345f2d8f79e6"
 COPY --from=ui-build /src/oidc-ui/dist /usr/share/nginx/html
+COPY --from=ui-build /src/LICENSE /src/THIRD-PARTY-NOTICES.txt /licenses/esignet/
 COPY ui/nginx.conf /etc/nginx/esignet-ui.conf
 USER 101:101
 EXPOSE 3000
