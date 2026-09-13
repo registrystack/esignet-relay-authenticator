@@ -1,14 +1,14 @@
-# Release artifacts
+# Release v0.5.0
 
 The manually dispatched release workflow publishes the native Go BREG provider
 and companion OIDC UI as separate images under `ghcr.io/registrystack`, then
 creates their shared GitHub release and source tag. It does not publish a
 `latest` image tag or change a deployment.
 
-Version 0.4.0 is already published and contains only the provider. The companion
-UI is an unreleased addition. Before dispatching, prepare an unused version in
-the workflow, build defaults, image labels and maintained release documentation.
-Never rerun the current 0.4.0 workflow to publish the UI.
+Version 0.5.0 adds the companion UI. Version 0.4.0 remains the historical
+provider-only release; its tag, image and assets must not be changed. The two
+0.5.0 images are `ghcr.io/registrystack/esignet-relay-authenticator:0.5.0` and
+`ghcr.io/registrystack/esignet-oidc-ui:0.5.0`.
 
 Merge the release changes into `main` and wait for the **CI** push run on that exact commit to succeed. Then dispatch the workflow from `main`:
 
@@ -32,12 +32,12 @@ GitHub authenticates an artifact attestation over both archives and their checks
 
 ## Verify published artifacts
 
-For the published provider-only v0.4.0, download the four release assets into an empty directory:
+After publication, download the seven release assets into an empty directory:
 
 ```sh
-gh release download v0.4.0 --repo registrystack/esignet-relay-authenticator
-sha256sum --check esignet-breg-candidate.oci.tar.sha256
-for artifact in esignet-breg-candidate.oci.tar esignet-breg-candidate.oci.tar.metadata.json; do
+gh release download v0.5.0 --repo registrystack/esignet-relay-authenticator
+sha256sum --check esignet-breg-candidate.oci.tar.sha256 esignet-ui-candidate.oci.tar.sha256
+for artifact in esignet-{breg,ui}-candidate.oci.tar{,.metadata.json,.sha256}; do
   gh attestation verify "$artifact" \
     --repo registrystack/esignet-relay-authenticator \
     --signer-workflow registrystack/esignet-relay-authenticator/.github/workflows/release.yml \
@@ -46,20 +46,21 @@ for artifact in esignet-breg-candidate.oci.tar esignet-breg-candidate.oci.tar.me
 done
 ```
 
-The historical `candidate` filename is retained as the build export name. The image version label and source revision in `esignet-breg-candidate.oci.tar.metadata.json` identify the released version. Use its `image_index_digest` to pin a deployment or compare the registry identity:
+The historical `candidate` filenames remain the build export names. Each
+metadata file records that component's image version, source revision and
+`image_index_digest`. Compare both published registry identities:
 
 ```sh
-skopeo inspect --raw docker://ghcr.io/registrystack/esignet-relay-authenticator:0.4.0 > published-index.json
-printf 'sha256:'; sha256sum published-index.json
+skopeo inspect --raw docker://ghcr.io/registrystack/esignet-relay-authenticator:0.5.0 > provider-index.json
+skopeo inspect --raw docker://ghcr.io/registrystack/esignet-oidc-ui:0.5.0 > ui-index.json
+sha256sum provider-index.json ui-index.json
 ```
 
-The computed digest must match `image_index_digest`. Verify the release tag resolves to the metadata's `org.opencontainers.image.revision` and that `io.registry.source.state` is `clean`. The attestation verification output must identify the release workflow and that same source commit. The release includes an attestation bundle so verification does not depend on keeping the temporary workflow artifact.
+Each computed hash, prefixed with `sha256:`, must match its own metadata's `image_index_digest`. Verify the release tag resolves to the metadata's `org.opencontainers.image.revision` and that `io.registry.source.state` is `clean`. The attestation verification output must identify the release workflow and that same source commit. The release includes an attestation bundle so verification does not depend on keeping the temporary workflow artifact.
 
-For a release containing the companion UI, also verify
-`esignet-ui-candidate.oci.tar.sha256`, attestations for its archive and metadata,
-and the `ghcr.io/registrystack/esignet-oidc-ui` index at that same version against
-its own metadata. There are seven assets: two archives, two checksum files, two
-metadata files and the shared authenticated attestation bundle.
+The seven assets are two archives, two checksum files, two metadata files and
+the shared authenticated attestation bundle. Use each component's exact index
+digest as its deployment pin.
 
 Check unauthenticated image access if the release is intended for public use. A newly created GHCR package can require a separate package-visibility setting even when its source repository is public. The workflow does not change organization or package visibility settings.
 
