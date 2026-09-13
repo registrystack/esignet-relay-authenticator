@@ -7,9 +7,9 @@ the current provider supports **BREG only**. Relay integration is deferred.
 
 The provider verifies a deployment-supplied challenge, checks an account through
 BREG, and retrieves approved identity fields after fresh consent. BREG remains
-the system of record and independently enforces its access profile. Registry
-Mint authenticates the workload. eSignet owns OAuth/OIDC, encrypted flow state,
-and UserInfo signing and encryption.
+the system of record and independently enforces its access profile. A configured
+OAuth token issuer authenticates the workload. eSignet owns OAuth/OIDC,
+encrypted flow state, and UserInfo signing and encryption.
 
 ## Compatibility
 
@@ -58,7 +58,7 @@ See [configuration](docs/esignet-configuration.md), the
 
 ## Authentication and privacy
 
-- A failed challenge makes no Mint or BREG request. Account checks request only
+- A failed challenge makes no token-issuer or BREG request. Account checks request only
   their configured nonempty field set.
 - Every login asks for fresh consent. Attribute retrieval intersects approved
   claim names with the claim map and provisioned BREG fields. An empty result
@@ -70,7 +70,8 @@ See [configuration](docs/esignet-configuration.md), the
 - A five-minute JSON-safe context binds the lookup to RP, client, transaction,
   subject and identifier type. eSignet encrypts flow storage; there is no extra
   signed KYC bearer token or provider-side identity cache.
-- Mint authentication uses ES256 or RS256 `private_key_jwt`. Cache misses are
+- Token client authentication uses ES256 or RS256 `private_key_jwt` with an
+  explicit assertion audience, resource and scope set. Cache misses are
   synchronized; validity includes acquisition time. Rejected credentials are
   invalidated without replaying the failed lookup.
 - Errors are fixed and value-free. HTTP calls have bounded duration and response

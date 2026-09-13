@@ -78,12 +78,12 @@ func (p *Provider) invalidate(token string) {
 	}
 }
 func (p *Provider) acquire(ctx context.Context, start time.Time) (string, time.Duration, error) {
-	assertion, e := p.key.assertion(p.config.Mint.ClientID, p.config.Mint.AssertionAudience, start.Unix(), start.Unix()+int64(p.config.Mint.AssertionTTLSeconds))
+	assertion, e := p.key.assertion(p.config.TokenClient.ClientID, p.config.TokenClient.AssertionAudience, start.Unix(), start.Unix()+int64(p.config.TokenClient.AssertionTTLSeconds))
 	if e != nil {
 		return "", 0, ErrUnavailable
 	}
-	form := url.Values{"grant_type": {"client_credentials"}, "client_assertion_type": {"urn:ietf:params:oauth:client-assertion-type:jwt-bearer"}, "client_assertion": {assertion}}
-	req, e := http.NewRequestWithContext(ctx, http.MethodPost, p.config.Mint.TokenEndpoint, strings.NewReader(form.Encode()))
+	form := url.Values{"grant_type": {"client_credentials"}, "client_id": {p.config.TokenClient.ClientID}, "client_assertion_type": {"urn:ietf:params:oauth:client-assertion-type:jwt-bearer"}, "client_assertion": {assertion}, "resource": {p.config.TokenClient.Resource}, "scope": {strings.Join(p.config.TokenClient.Scopes, " ")}}
+	req, e := http.NewRequestWithContext(ctx, http.MethodPost, p.config.TokenClient.TokenEndpoint, strings.NewReader(form.Encode()))
 	if e != nil {
 		return "", 0, ErrUnavailable
 	}
@@ -94,19 +94,31 @@ func (p *Provider) acquire(ctx context.Context, start time.Time) (string, time.D
 		return "", 0, ErrUnavailable
 	}
 	var out struct {
-		AccessToken string `json:"access_token"`
-		TokenType   string `json:"token_type"`
-		ExpiresIn   int64  `json:"expires_in"`
+		AccessToken string  `json:"access_token"`
+		TokenType   string  `json:"token_type"`
+		ExpiresIn   int64   `json:"expires_in"`
+		Scope       *string `json:"scope"`
 	}
 	if decodeJSON(body, &out) != nil || out.AccessToken == "" || len(out.AccessToken) > 64<<10 || !strings.EqualFold(out.TokenType, "Bearer") || out.ExpiresIn <= 0 {
 		return "", 0, ErrUnavailable
+	}
+	if out.Scope != nil {
+		granted, valid := parseScope(*out.Scope)
+		if !valid {
+			return "", 0, ErrUnavailable
+		}
+		for _, requested := range p.config.TokenClient.Scopes {
+			if !contains(granted, requested) {
+				return "", 0, ErrUnavailable
+			}
+		}
 	}
 	for _, r := range out.AccessToken {
 		if r <= 32 || r >= 127 {
 			return "", 0, ErrUnavailable
 		}
 	}
-	max := int64(p.config.Mint.TokenCacheMaxSeconds)
+	max := int64(p.config.TokenClient.TokenCacheMaxSeconds)
 	if out.ExpiresIn > max {
 		out.ExpiresIn = max
 	}

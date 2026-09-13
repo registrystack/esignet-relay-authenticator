@@ -16,7 +16,7 @@ type Config struct {
 	SubjectIDType  string            `yaml:"subject_id_type"`
 	PSUTSecretFile string            `yaml:"psut_secret_file"`
 	BREG           BREGConfig        `yaml:"breg"`
-	Mint           MintConfig        `yaml:"mint"`
+	TokenClient    TokenClientConfig `yaml:"token_client"`
 	ClaimMap       map[string]string `yaml:"claim_map"`
 	HTTP           HTTPConfig        `yaml:"http"`
 	Demo           DemoConfig        `yaml:"demo"`
@@ -30,14 +30,16 @@ type BREGConfig struct {
 	ProvisionedFields  []string `yaml:"provisioned_fields"`
 	AccountCheckFields []string `yaml:"account_check_fields"`
 }
-type MintConfig struct {
-	TokenEndpoint        string `yaml:"token_endpoint"`
-	AssertionAudience    string `yaml:"assertion_audience"`
-	ClientID             string `yaml:"client_id"`
-	PrivateKeyFile       string `yaml:"private_key_file"`
-	KeyID                string `yaml:"key_id"`
-	AssertionTTLSeconds  int    `yaml:"assertion_ttl_seconds"`
-	TokenCacheMaxSeconds int    `yaml:"token_cache_max_seconds"`
+type TokenClientConfig struct {
+	TokenEndpoint        string   `yaml:"token_endpoint"`
+	AssertionAudience    string   `yaml:"assertion_audience"`
+	ClientID             string   `yaml:"client_id"`
+	PrivateKeyFile       string   `yaml:"private_key_file"`
+	KeyID                string   `yaml:"key_id"`
+	Resource             string   `yaml:"resource"`
+	Scopes               []string `yaml:"scopes"`
+	AssertionTTLSeconds  int      `yaml:"assertion_ttl_seconds"`
+	TokenCacheMaxSeconds int      `yaml:"token_cache_max_seconds"`
 }
 type HTTPConfig struct {
 	TimeoutSeconds    int    `yaml:"timeout_seconds"`
@@ -58,6 +60,13 @@ func LoadConfig(path string) (Config, error) {
 	b, err := readBounded(path, 1<<20)
 	if err != nil {
 		return c, errors.New("configuration file unavailable")
+	}
+	var document yaml.Node
+	if yaml.Unmarshal(b, &document) != nil {
+		return Config{}, errors.New("configuration YAML invalid")
+	}
+	if hasTopLevelKey(&document, "mint") {
+		return Config{}, errors.New("configuration invalid: mint is retired; use token_client")
 	}
 	d := yaml.NewDecoder(bytes.NewReader(b))
 	d.KnownFields(true)
@@ -84,14 +93,11 @@ func (c *Config) defaults() {
 	if c.BREG.SelectorField == "" {
 		c.BREG.SelectorField = "uin"
 	}
-	if c.Mint.AssertionAudience == "" {
-		c.Mint.AssertionAudience = c.Mint.TokenEndpoint
+	if c.TokenClient.AssertionTTLSeconds == 0 {
+		c.TokenClient.AssertionTTLSeconds = 120
 	}
-	if c.Mint.AssertionTTLSeconds == 0 {
-		c.Mint.AssertionTTLSeconds = 120
-	}
-	if c.Mint.TokenCacheMaxSeconds == 0 {
-		c.Mint.TokenCacheMaxSeconds = 300
+	if c.TokenClient.TokenCacheMaxSeconds == 0 {
+		c.TokenClient.TokenCacheMaxSeconds = 300
 	}
 	if c.HTTP.TimeoutSeconds == 0 {
 		c.HTTP.TimeoutSeconds = 10
@@ -109,16 +115,19 @@ func (c Config) validate() error {
 	}
 	check(validText(c.SubjectIDType), "subject_id_type")
 	check(!blank(c.PSUTSecretFile), "psut_secret_file")
-	check(validText(c.Mint.ClientID), "mint.client_id")
-	check(!blank(c.Mint.PrivateKeyFile), "mint.private_key_file")
+	check(validText(c.TokenClient.ClientID), "token_client.client_id")
+	check(!blank(c.TokenClient.PrivateKeyFile), "token_client.private_key_file")
+	check(validText(c.TokenClient.KeyID), "token_client.key_id")
 	check(validText(c.BREG.Route) && !strings.ContainsAny(c.BREG.Route, "/\\?#") && c.BREG.Route != "." && c.BREG.Route != "..", "breg.route")
 	check(validText(c.BREG.Selector), "breg.selector")
 	check(validField(c.BREG.SelectorField), "breg.selector_field")
-	check(validEndpoint(c.Mint.TokenEndpoint, c.HTTP.AllowInsecureHTTP), "mint.token_endpoint")
-	check(validEndpoint(c.Mint.AssertionAudience, c.HTTP.AllowInsecureHTTP), "mint.assertion_audience")
+	check(validEndpoint(c.TokenClient.TokenEndpoint, c.HTTP.AllowInsecureHTTP), "token_client.token_endpoint")
+	check(validEndpoint(c.TokenClient.AssertionAudience, c.HTTP.AllowInsecureHTTP), "token_client.assertion_audience")
+	check(validResource(c.TokenClient.Resource), "token_client.resource")
 	check(validEndpoint(c.BREG.BaseURL, c.HTTP.AllowInsecureHTTP), "breg.base_url")
-	check(c.Mint.AssertionTTLSeconds >= 1 && c.Mint.AssertionTTLSeconds <= 300, "mint.assertion_ttl_seconds")
-	check(c.Mint.TokenCacheMaxSeconds >= 1 && c.Mint.TokenCacheMaxSeconds <= 86400, "mint.token_cache_max_seconds")
+	check(c.TokenClient.AssertionTTLSeconds >= 1 && c.TokenClient.AssertionTTLSeconds <= 300, "token_client.assertion_ttl_seconds")
+	check(c.TokenClient.TokenCacheMaxSeconds >= 1 && c.TokenClient.TokenCacheMaxSeconds <= 86400, "token_client.token_cache_max_seconds")
+	check(validScopes(c.TokenClient.Scopes), "token_client.scopes")
 	check(c.HTTP.TimeoutSeconds >= 1 && c.HTTP.TimeoutSeconds <= 120, "http.timeout_seconds")
 	check(c.HTTP.MaxResponseBytes >= 1 && c.HTTP.MaxResponseBytes <= 16<<20, "http.max_response_bytes")
 	check(!c.Demo.StaticOTPEnabled || !blank(c.Demo.StaticOTPFile), "demo.static_otp_file")
@@ -147,6 +156,66 @@ func (c Config) validate() error {
 		return errors.New("configuration invalid: " + strings.Join(invalid, ", "))
 	}
 	return nil
+}
+
+func hasTopLevelKey(document *yaml.Node, name string) bool {
+	if document == nil || len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
+		return false
+	}
+	mapping := document.Content[0]
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == name {
+			return true
+		}
+	}
+	return false
+}
+
+func validScopes(scopes []string) bool {
+	if len(scopes) == 0 || len(scopes) > 32 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		if len(scope) > 256 || !validScopeToken(scope) {
+			return false
+		}
+		if _, ok := seen[scope]; ok {
+			return false
+		}
+		seen[scope] = struct{}{}
+	}
+	return len(strings.Join(scopes, " ")) <= 4<<10
+}
+
+func validScopeToken(scope string) bool {
+	if scope == "" {
+		return false
+	}
+	for _, b := range []byte(scope) {
+		if b != 0x21 && (b < 0x23 || b > 0x5b) && (b < 0x5d || b > 0x7e) {
+			return false
+		}
+	}
+	return true
+}
+
+func parseScope(scope string) ([]string, bool) {
+	if scope == "" || len(scope) > 4<<10 {
+		return nil, false
+	}
+	values := strings.Split(scope, " ")
+	for _, value := range values {
+		if !validScopeToken(value) {
+			return nil, false
+		}
+	}
+	return values, true
+}
+
+func validResource(resource string) bool {
+	u, err := url.Parse(resource)
+	return err == nil && len(resource) <= 4096 && u.IsAbs() && u.Scheme != "" && !strings.Contains(resource, "#") && u.User == nil
 }
 func reservedClaim(s string) bool {
 	switch s {

@@ -7,7 +7,8 @@ other lab Relay services are independent and are not used by this login flow.
 ## Components
 
 - Native BREG and PostgreSQL hold synthetic population records.
-- Native Registry Mint issues short-lived credentials to the lookup-only client.
+- The configured OAuth issuer issues short-lived credentials to the lookup-only
+  client.
 - The candidate eSignet image embeds this provider and the OTP/consent flow.
 - Separate eSignet PostgreSQL, Redis and host key volumes hold its runtime state.
 - The matching eSignet UI and Solmara Portal complete a verified OIDC login.
@@ -20,8 +21,8 @@ published or deployed release.
 
 ## Verification
 
-The local journey must verify challenge rejection before BREG/Mint, minimal
-account projection, explicit consent, optional refusal on repeated logins,
+The local journey must verify challenge rejection before BREG or token
+acquisition, minimal account projection, explicit consent, optional refusal on repeated logins,
 required-claim refusal, signed UserInfo verification and subject correlation.
 An independent encrypted-UserInfo client exercises the host encryption path.
 The BREG source client must fail list and write attempts and must not retrieve

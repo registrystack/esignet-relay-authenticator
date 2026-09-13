@@ -42,13 +42,13 @@ func (v *verifierStub) Verify(ctx context.Context, _ ChallengeRequest) error {
 func (v *verifierStub) SendOTP(context.Context, OTPRequest) error { return nil }
 
 type fixture struct {
-	p                      *Provider
-	config                 Config
-	mintCalls, lookupCalls atomic.Int32
-	handler                func(http.ResponseWriter, *http.Request)
-	tokenHandler           func(http.ResponseWriter, *http.Request)
-	key                    *ecdsa.PrivateKey
-	t                      *testing.T
+	p                       *Provider
+	config                  Config
+	tokenCalls, lookupCalls atomic.Int32
+	handler                 func(http.ResponseWriter, *http.Request)
+	tokenHandler            func(http.ResponseWriter, *http.Request)
+	key                     *ecdsa.PrivateKey
+	t                       *testing.T
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -72,7 +72,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/token" {
-			f.mintCalls.Add(1)
+			f.tokenCalls.Add(1)
 			if f.tokenHandler != nil {
 				f.tokenHandler(w, r)
 				return
@@ -90,8 +90,7 @@ func newFixture(t *testing.T) *fixture {
 		fmt.Fprint(w, `{"data":{"recordIdentifier":"hidden-metadata","domainData":{"uin":"subject-canary","status":"active","givenName":"Ada","familyName":"Lovelace","gender":"female","operatorNote":"forbidden-canary"}},"meta":{"email":"hidden"}}`)
 	}))
 	t.Cleanup(s.Close)
-	f.config = Config{PSUTSecretFile: secretPath, BREG: BREGConfig{BaseURL: s.URL, Route: "population", Selector: "by-uin", AccessProfile: "esignet-source", ProvisionedFields: []string{"uin", "status", "givenName", "familyName", "gender"}}, Mint: MintConfig{TokenEndpoint: s.URL + "/token", ClientID: "client"}, ClaimMap: map[string]string{"sub": "$psut", "given_name": "givenName", "family_name": "familyName", "gender": "gender", "email": "email"}, HTTP: HTTPConfig{AllowInsecureHTTP: true}}
-	f.config.Mint.PrivateKeyFile = keyPath
+	f.config = Config{PSUTSecretFile: secretPath, BREG: BREGConfig{BaseURL: s.URL, Route: "population", Selector: "by-uin", AccessProfile: "esignet-source", ProvisionedFields: []string{"uin", "status", "givenName", "familyName", "gender"}}, TokenClient: TokenClientConfig{TokenEndpoint: s.URL + "/token", AssertionAudience: s.URL, ClientID: "client", PrivateKeyFile: keyPath, KeyID: "test-key", Resource: "urn:breg:test:population", Scopes: []string{"registry.read", "records.lookup"}}, ClaimMap: map[string]string{"sub": "$psut", "given_name": "givenName", "family_name": "familyName", "gender": "gender", "email": "email"}, HTTP: HTTPConfig{AllowInsecureHTTP: true}}
 	f.p, e = New(f.config, WithChallengeVerifier(&verifierStub{}))
 	if e != nil {
 		t.Fatal(e)
@@ -101,13 +100,13 @@ func newFixture(t *testing.T) *fixture {
 func (f *fixture) checkAssertion(r *http.Request) {
 	t := f.t
 	if r.Method != "POST" || r.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
-		t.Error("wrong Mint method/content type")
+		t.Error("wrong token endpoint method/content type")
 	}
 	if e := r.ParseForm(); e != nil {
 		t.Error(e)
 	}
-	if len(r.PostForm) != 3 || r.Form.Get("grant_type") != "client_credentials" || r.Form.Get("client_assertion_type") != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
-		t.Error("wrong Mint form")
+	if len(r.PostForm) != 6 || r.Form.Get("grant_type") != "client_credentials" || r.Form.Get("client_id") != "client" || r.Form.Get("client_assertion_type") != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" || r.Form.Get("resource") != f.p.config.TokenClient.Resource || r.Form.Get("scope") != "registry.read records.lookup" {
+		t.Error("wrong token request form")
 	}
 	parts := strings.Split(r.Form.Get("client_assertion"), ".")
 	if len(parts) != 3 {
@@ -123,7 +122,7 @@ func (f *fixture) checkAssertion(r *http.Request) {
 	if h["alg"] != "ES256" || h["kid"] != "test-key" || h["typ"] != "JWT" || len(h) != 3 {
 		t.Error("wrong assertion header")
 	}
-	if c["iss"] != "client" || c["sub"] != "client" || c["aud"] != f.p.config.Mint.AssertionAudience || c["jti"] == "" || len(c) != 6 {
+	if c["iss"] != "client" || c["sub"] != "client" || c["aud"] != f.p.config.TokenClient.AssertionAudience || c["jti"] == "" || len(c) != 6 {
 		t.Error("wrong assertion claims")
 	}
 	if c["exp"].(float64)-c["iat"].(float64) != 120 {
@@ -176,7 +175,7 @@ func TestAuthenticationAndConsentContract(t *testing.T) {
 	if !reflect.DeepEqual(attrs, map[string]any{"given_name": "Ada", "gender": "female", "sub": a.Subject}) {
 		t.Fatalf("wrong attribute keys: %v", reflect.ValueOf(attrs).MapKeys())
 	}
-	if f.mintCalls.Load() != 1 || f.lookupCalls.Load() != 2 {
+	if f.tokenCalls.Load() != 1 || f.lookupCalls.Load() != 2 {
 		t.Fatal("wrong calls")
 	}
 	for _, v := range f.p.SupportedClaims() {
@@ -196,7 +195,7 @@ func TestChallengeFailureNoDownstreamCalls(t *testing.T) {
 	f := newFixture(t)
 	f.p.verifier = &verifierStub{verifyErr: fmt.Errorf("OTP identifier secret-canary")}
 	_, e := f.p.Authenticate(context.Background(), AuthenticationRequest{Identifier: "subject-canary", IdentifierType: "uin", Challenge: "bad", Binding: binding()})
-	if e != ErrChallengeFailed || f.mintCalls.Load() != 0 || f.lookupCalls.Load() != 0 {
+	if e != ErrChallengeFailed || f.tokenCalls.Load() != 0 || f.lookupCalls.Load() != 0 {
 		t.Fatal("bad challenge reached downstream")
 	}
 }
@@ -227,7 +226,7 @@ func TestChallengeCancellationNoDownstreamCalls(t *testing.T) {
 			if err != ErrUnavailable {
 				t.Fatalf("want unavailable, got %v", err)
 			}
-			if v.calls.Load() != 1 || f.mintCalls.Load() != 0 || f.lookupCalls.Load() != 0 || result.Subject != "" || result.Context != nil {
+			if v.calls.Load() != 1 || f.tokenCalls.Load() != 0 || f.lookupCalls.Load() != 0 || result.Subject != "" || result.Context != nil {
 				t.Fatal("interrupted verification produced authentication state or downstream traffic")
 			}
 		})
@@ -292,8 +291,8 @@ func TestTokenSingleFlight(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if f.mintCalls.Load() != 1 {
-		t.Fatalf("Mint called %d times", f.mintCalls.Load())
+	if f.tokenCalls.Load() != 1 {
+		t.Fatalf("token endpoint called %d times", f.tokenCalls.Load())
 	}
 }
 func TestProblemClassificationInvalidationAndRedaction(t *testing.T) {
@@ -319,7 +318,7 @@ func TestProblemClassificationInvalidationAndRedaction(t *testing.T) {
 			if tc.invalidates {
 				want = 2
 			}
-			if f.mintCalls.Load() != want || f.lookupCalls.Load() != 2 {
+			if f.tokenCalls.Load() != want || f.lookupCalls.Load() != 2 {
 				t.Fatal("unexpected replay or token reuse")
 			}
 		})
@@ -358,7 +357,7 @@ func TestRSAAssertionAndKeyValidation(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	token, e := k.assertion("client", "https://mint/token", 100, 200)
+	token, e := k.assertion("client", "https://issuer.example/token", 100, 200)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -385,6 +384,18 @@ func TestConfigAndMissingVerifierFailClosed(t *testing.T) {
 			t.Fatal("YAML not rejected safely")
 		}
 	}
+	path := filepath.Join(t.TempDir(), "registry.yaml")
+	_ = os.WriteFile(path, []byte("mint:\n  client_id: legacy-client\n"), 0600)
+	_, e := LoadConfig(path)
+	if e == nil || e.Error() != "configuration invalid: mint is retired; use token_client" {
+		t.Fatalf("retired mint key did not produce migration diagnostic: %v", e)
+	}
+	path = filepath.Join(t.TempDir(), "registry.yaml")
+	_ = os.WriteFile(path, []byte("token_client:\n  client_secret: secret-canary\n"), 0600)
+	_, e = LoadConfig(path)
+	if e == nil || strings.Contains(e.Error(), "secret-canary") {
+		t.Fatal("client secret configuration accepted or disclosed")
+	}
 }
 
 func TestCacheDeadlineFromAcquisitionStartAndCap(t *testing.T) {
@@ -401,7 +412,7 @@ func TestCacheDeadlineFromAcquisitionStartAndCap(t *testing.T) {
 			var tick atomic.Int64
 			tick.Store(1000)
 			f.p.now = func() time.Time { return time.Unix(tick.Load(), 0) }
-			f.p.config.Mint.TokenCacheMaxSeconds = 20
+			f.p.config.TokenClient.TokenCacheMaxSeconds = 20
 			f.tokenHandler = func(w http.ResponseWriter, r *http.Request) {
 				tick.Add(tc.elapsed)
 				expiry := 10
@@ -425,7 +436,7 @@ func TestCacheDeadlineFromAcquisitionStartAndCap(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if f.mintCalls.Load() != tc.wantCalls {
+			if f.tokenCalls.Load() != tc.wantCalls {
 				t.Fatal("cache deadline not acquisition bounded")
 			}
 		})
@@ -447,11 +458,11 @@ func TestCacheWaiterCancellationAndFailure(t *testing.T) {
 	if e := <-finished; e != ErrUnavailable {
 		t.Fatal("acquisition failure not shared")
 	}
-	if f.mintCalls.Load() != 0 {
+	if f.tokenCalls.Load() != 0 {
 		t.Fatal("waiter retried failed acquisition")
 	}
 }
-func TestMintMalformedTokenAndFreshAssertions(t *testing.T) {
+func TestTokenClientMalformedTokenAndFreshAssertions(t *testing.T) {
 	for _, response := range []string{`{"access_token":"secret-canary","token_type":"Bearer","expires_in":0}`, `{"access_token":"secret-canary","token_type":"Basic","expires_in":3}`, `{"access_token":"secret-canary","token_type":"Bearer","expires_in":1.5}`, `{"access_token":"line\nbreak","token_type":"Bearer","expires_in":3}`, `{"access_token":"x","token_type":"Bearer","expires_in":3} {}`} {
 		t.Run(fmt.Sprint(len(response)), func(t *testing.T) {
 			f := newFixture(t)
@@ -522,7 +533,15 @@ func TestConfigFieldsNameOnlyAndProtocolClaimProtection(t *testing.T) {
 		change func(*Config)
 		field  string
 	}{
-		{"endpoint", func(c *Config) { c.Mint.TokenEndpoint = "secret-canary" }, "mint.token_endpoint"},
+		{"endpoint", func(c *Config) { c.TokenClient.TokenEndpoint = "secret-canary" }, "token_client.token_endpoint"},
+		{"audience", func(c *Config) { c.TokenClient.AssertionAudience = "" }, "token_client.assertion_audience"},
+		{"key ID", func(c *Config) { c.TokenClient.KeyID = "" }, "token_client.key_id"},
+		{"resource", func(c *Config) { c.TokenClient.Resource = "" }, "token_client.resource"},
+		{"resource fragment", func(c *Config) { c.TokenClient.Resource = "urn:registry:breg#fragment" }, "token_client.resource"},
+		{"resource userinfo", func(c *Config) { c.TokenClient.Resource = "https://user:secret-canary@breg.example" }, "token_client.resource"},
+		{"scopes missing", func(c *Config) { c.TokenClient.Scopes = nil }, "token_client.scopes"},
+		{"scope invalid", func(c *Config) { c.TokenClient.Scopes = []string{"records.lookup secret-canary"} }, "token_client.scopes"},
+		{"scope duplicate", func(c *Config) { c.TokenClient.Scopes = []string{"records.lookup", "records.lookup"} }, "token_client.scopes"},
 		{"projection", func(c *Config) { c.BREG.AccountCheckFields = []string{"operatorNote"} }, "breg.account_check_fields"},
 		{"protocol", func(c *Config) { c.ClaimMap = map[string]string{"iss": "givenName"} }, "claim_map"},
 		{"subject", func(c *Config) { c.ClaimMap = map[string]string{"sub": "uin"} }, "claim_map"},
@@ -538,9 +557,46 @@ func TestConfigFieldsNameOnlyAndProtocolClaimProtection(t *testing.T) {
 	}
 }
 
+func TestTokenResponseCannotNarrowConfiguredScopes(t *testing.T) {
+	for _, scope := range []string{"registry.read", "registry.read  records.lookup", "registry.read secret-canary\n"} {
+		t.Run(fmt.Sprint(len(scope)), func(t *testing.T) {
+			f := newFixture(t)
+			f.tokenHandler = func(w http.ResponseWriter, r *http.Request) {
+				f.checkAssertion(r)
+				fmt.Fprintf(w, `{"access_token":"token-canary","token_type":"Bearer","expires_in":300,"scope":%q}`, scope)
+			}
+			_, e := f.p.lookup(context.Background(), "subject-canary", []string{"uin"})
+			if e != ErrUnavailable || f.lookupCalls.Load() != 0 {
+				t.Fatal("invalid or narrowed token scope reached BREG")
+			}
+		})
+	}
+	f := newFixture(t)
+	f.tokenHandler = func(w http.ResponseWriter, r *http.Request) {
+		f.checkAssertion(r)
+		fmt.Fprint(w, `{"access_token":"token-canary","token_type":"Bearer","expires_in":300,"scope":"records.lookup registry.read extra"}`)
+	}
+	if _, e := f.p.lookup(context.Background(), "subject-canary", []string{"uin"}); e != nil {
+		t.Fatal(e)
+	}
+}
+
+func TestTokenClientPolicyDetachedFromCaller(t *testing.T) {
+	f := newFixture(t)
+	c := f.config
+	p, e := New(c, WithChallengeVerifier(&verifierStub{}))
+	if e != nil {
+		t.Fatal(e)
+	}
+	c.TokenClient.Scopes[0] = "mutated"
+	if p.config.TokenClient.Scopes[0] != "registry.read" {
+		t.Fatal("caller mutated configured token scopes")
+	}
+}
+
 func TestMalformedSigningKeyMetadata(t *testing.T) {
 	f := newFixture(t)
-	raw, e := os.ReadFile(f.config.Mint.PrivateKeyFile)
+	raw, e := os.ReadFile(f.config.TokenClient.PrivateKeyFile)
 	if e != nil {
 		t.Fatal(e)
 	}

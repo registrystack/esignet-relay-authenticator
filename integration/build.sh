@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
+candidate_image=${CANDIDATE_IMAGE:-esignet-relay-authenticator:0.3.0-candidate}
 usage() {
   cat <<'EOF'
 Usage: integration/build.sh [--load | --help]
@@ -40,7 +41,7 @@ verify_source_unchanged() {
 }
 if [[ "${1:-}" == --load ]]; then
   docker buildx build --platform "linux/$architecture" --load "${metadata_args[@]}" \
-    --tag esignet-relay-authenticator:0.3.0-candidate "$repo_root"
+    --tag "$candidate_image" "$repo_root"
   verify_source_unchanged
   exit 0
 fi
@@ -48,6 +49,6 @@ mkdir -p "$repo_root/dist"
 docker buildx build --platform linux/amd64,linux/arm64 --provenance=mode=max \
   "${metadata_args[@]}" \
   --sbom=true --output "type=oci,dest=$repo_root/dist/esignet-breg-candidate.oci.tar" \
-  --tag esignet-relay-authenticator:0.3.0-candidate "$repo_root"
+  --tag "$candidate_image" "$repo_root"
 verify_source_unchanged
 python3 "$repo_root/integration/artifact-metadata.py" "$repo_root/dist/esignet-breg-candidate.oci.tar" "$source_sha"
