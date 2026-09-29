@@ -153,6 +153,7 @@ jobs:
           status=0
           docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges \
+            -e MOSIP_ESIGNET_HOST=https://esignet.example.org \
             -e MOSIP_ESIGNET_OAUTH_AUTH_CODE_LIFETIME_SECONDS=invalid \
             esignet-release-smoke:0.6.0 > "$RUNNER_TEMP/startup-smoke.log" 2>&1 || status=$?
           test "$status" -eq 1
