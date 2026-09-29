@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0 (Unreleased)
+## 0.6.0 (2026-09-29)
 
 - Rebase the provider and companion UI onto eSignet `v2.0.0` GA at
   `db528423dac7898ad546cb7b2f5f867a949676a7` and its embedded Thunder backend

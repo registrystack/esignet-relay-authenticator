@@ -29,16 +29,16 @@ artifacts, but their configuration is not accepted here.
 
 ## Release image
 
-The release workflow is configured to publish version 0.6.0 as
+The version 0.6.0 release distributes the provider as
 `ghcr.io/registrystack/esignet-relay-authenticator:0.6.0` for Linux amd64 and arm64.
 Use the exact index digest from the release metadata for deployment pins. The
-GitHub release will also include the OCI archive, checksums, and source metadata.
+GitHub release includes the OCI archive, checksums, and source metadata.
 See [release verification](docs/release.md) before deploying.
 
 The optional [companion OIDC UI](ui/README.md) uses the same pinned eSignet
 source and a same-origin proxy for public identity routes. Version 0.5.0 added
-the UI as a separate release image and OCI archive. Version 0.6.0 is configured
-to publish it as `ghcr.io/registrystack/esignet-oidc-ui:0.6.0`.
+the UI as a separate release image and OCI archive. Version 0.6.0 distributes it
+as `ghcr.io/registrystack/esignet-oidc-ui:0.6.0`.
 Both components share the release's source revision; pin each by its own digest.
 
 ## Build and check

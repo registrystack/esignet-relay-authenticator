@@ -1,4 +1,4 @@
-# Release preparation for v0.6.0
+# Release v0.6.0
 
 The manually dispatched release workflow is configured to publish the native Go
 BREG provider and companion OIDC UI as separate images under
@@ -8,7 +8,7 @@ It does not publish a `latest` image tag or change a deployment.
 Version 0.6.0 updates the embedded runtime to eSignet 2.0.0 GA and Thunder
 `v0.0.0-20260825062603-12f517c43840`. Version 0.5.0 added the companion UI,
 and version 0.4.0 introduced the issuer-neutral provider. Historical tags,
-images and assets must not be changed. The two planned 0.6.0 images are
+images and assets must not be changed. The two 0.6.0 images are
 `ghcr.io/registrystack/esignet-relay-authenticator:0.6.0` and
 `ghcr.io/registrystack/esignet-oidc-ui:0.6.0`.
 
