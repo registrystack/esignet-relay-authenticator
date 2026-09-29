@@ -15,8 +15,8 @@ encrypted flow state, and UserInfo signing and encryption.
 
 | Component | Pin |
 | --- | --- |
-| eSignet | `v2.0.0-beta.1`, `df0d0e771dae16eb2597b8e5b5dc65e70baa7f86` |
-| Thunder | The replacement module pinned by that release, `9a568aec1cbf` |
+| eSignet | `v2.0.0`, `db528423dac7898ad546cb7b2f5f867a949676a7` |
+| Thunder | Embedded backend `v0.0.0-20260825062603-12f517c43840` |
 | Go | 1.26 |
 | Provider selection | `MOSIP_ESIGNET_AUTHN_PROVIDER=breg` |
 | Configuration | `REGISTRY_ESIGNET_CONFIG_FILE` points to one YAML file |
@@ -29,15 +29,16 @@ artifacts, but their configuration is not accepted here.
 
 ## Release image
 
-The release workflow publishes version 0.5.0 as
-`ghcr.io/registrystack/esignet-relay-authenticator:0.5.0` for Linux amd64 and arm64.
+The release workflow is configured to publish version 0.6.0 as
+`ghcr.io/registrystack/esignet-relay-authenticator:0.6.0` for Linux amd64 and arm64.
 Use the exact index digest from the release metadata for deployment pins. The
-GitHub release also includes the OCI archive, checksums, and source metadata.
+GitHub release will also include the OCI archive, checksums, and source metadata.
 See [release verification](docs/release.md) before deploying.
 
 The optional [companion OIDC UI](ui/README.md) uses the same pinned eSignet
-source and a same-origin proxy for public identity routes. Version 0.5.0 adds
-`ghcr.io/registrystack/esignet-oidc-ui:0.5.0` as a separate image and OCI archive.
+source and a same-origin proxy for public identity routes. Version 0.5.0 added
+the UI as a separate release image and OCI archive. Version 0.6.0 is configured
+to publish it as `ghcr.io/registrystack/esignet-oidc-ui:0.6.0`.
 Both components share the release's source revision; pin each by its own digest.
 
 ## Build and check
@@ -54,7 +55,7 @@ GOTOOLCHAIN=go1.26.8 go vet ./...
 Core tests use HTTP fixtures. Integration checks compile the adapter against
 pinned eSignet and Thunder source. The image builder writes both Linux amd64 and
 arm64 variants to `dist/esignet-breg-candidate.oci.tar`, tagged
-`esignet-relay-authenticator:0.5.0-candidate`. It does not push images or create a
+`esignet-relay-authenticator:0.6.0-candidate`. It does not push images or create a
 release. Inspect `integration/upstream.env` for exact source and image pins.
 
 See [configuration](docs/esignet-configuration.md), the
