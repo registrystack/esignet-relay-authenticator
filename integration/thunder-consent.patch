@@ -1,0 +1,27 @@
+--- a/internal/flow/executor/auth_assert_executor.go
++++ b/internal/flow/executor/auth_assert_executor.go
+@@ -385,16 +385,15 @@ func (a *authAssertExecutor) getRequiredUserAttributes(ctx *providers.NodeConte
+ 	logger := a.logger.With(log.String(log.LoggerKeyExecutionID, ctx.ExecutionID))
+ 
+-	// Check if consent was recorded in this flow. If recorded, we should only include consented attributes
+-	// We check RuntimeKeyConsentID to determine if the consent executor ran and recorded a consent.
+-	if _, consentRecorded := ctx.RuntimeData[common.RuntimeKeyConsentID]; consentRecorded {
+-		// Get user attributes from consented attributes if consent was collected in this flow
+-		if consentedAttrsStr, exists := ctx.RuntimeData[common.RuntimeKeyConsentedAttributes]; exists {
+-			logger.Debug(ctx.Context, "Consent recorded with approved attributes")
+-			return strings.Fields(consentedAttrsStr)
+-		}
++	// The consent executor always sets consented attributes when it handles a decision, including an empty value
++	// for a timed-out prompt. Its presence takes precedence over the attributes from the original request.
++	if consentedAttrsStr, exists := ctx.RuntimeData[common.RuntimeKeyConsentedAttributes]; exists {
++		logger.Debug(ctx.Context, "Consent completed with approved attributes")
++		return strings.Fields(consentedAttrsStr)
++	}
+ 
+-		// If consent was recorded but no attributes were approved, attributes are empty
++	// A recorded consent without the derived attributes key also means no attributes were approved.
++	if _, consentRecorded := ctx.RuntimeData[common.RuntimeKeyConsentID]; consentRecorded {
+ 		logger.Debug(ctx.Context, "Consent recorded but no attributes approved")
+ 		return []string{}
+ 	}
+ 

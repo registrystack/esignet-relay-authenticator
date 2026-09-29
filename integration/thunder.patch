@@ -1,20 +1,17 @@
 --- a/internal/oauth/jwks/service.go
 +++ b/internal/oauth/jwks/service.go
-@@ -74,7 +74,16 @@
+@@ -85,6 +85,14 @@
  
  		switch pub := keyInfo.PublicKey.(type) {
  		case *rsa.PublicKey:
--			jwksKeys = append(jwksKeys, getRSAPublicKeyJWKS(pub, kid, x5c, x5t, x5tS256))
-+			jwk := getRSAPublicKeyJWKS(pub, kid, x5c, x5t, x5tS256)
-+			if keyInfo.Algorithm != "" {
-+				switch cryptolib.Algorithm(keyInfo.Algorithm) {
-+				case cryptolib.AlgorithmRS256, cryptolib.AlgorithmRS512, cryptolib.AlgorithmPS256:
-+					jwk.Alg = keyInfo.Algorithm
-+				default:
-+					continue
-+				}
++			if alg == "" {
++				alg = string(cryptolib.AlgorithmRS256)
 +			}
-+			jwksKeys = append(jwksKeys, jwk)
++			switch cryptolib.Algorithm(alg) {
++			case cryptolib.AlgorithmRS256, cryptolib.AlgorithmRS512, cryptolib.AlgorithmPS256:
++			default:
++				continue
++			}
+ 			jwksKeys = append(jwksKeys, getRSAPublicKeyJWKS(pub, kid, alg, x5c, x5t, x5tS256))
  		case *ecdsa.PublicKey:
- 			jwksKeys = append(jwksKeys, getECDSAPublicKeyJWKS(pub, kid, x5c, x5t, x5tS256))
- 		case ed25519.PublicKey:
+ 			jwksKeys = append(jwksKeys, getECDSAPublicKeyJWKS(pub, kid, alg, x5c, x5t, x5tS256))

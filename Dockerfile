@@ -1,4 +1,6 @@
 # syntax=docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
+# check=skip=SecretsUsedInArgOrEnv
+# AUTH_FLOW_ID selects a public flow; credentials are supplied through mounted files.
 FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26.8-bookworm@sha256:9fdc884aacc3bec89b20ffc69f4bb369c78210e3e4f600387b5128b12c199f81 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -16,13 +18,13 @@ ARG CANDIDATE_SOURCE_SHA256=unrecorded
 ARG CANDIDATE_SOURCE_REVISION=unknown
 ARG CANDIDATE_SOURCE_STATE=unrecorded
 LABEL org.opencontainers.image.source="https://github.com/registrystack/esignet-relay-authenticator" \
-      org.opencontainers.image.version="0.5.0" \
+      org.opencontainers.image.version="0.6.0" \
       org.opencontainers.image.revision=$CANDIDATE_SOURCE_REVISION \
       io.registry.source.sha256=$CANDIDATE_SOURCE_SHA256 \
       io.registry.source.state=$CANDIDATE_SOURCE_STATE \
       io.registry.esignet.source="https://github.com/mosip/esignet" \
-      io.registry.esignet.revision="df0d0e771dae16eb2597b8e5b5dc65e70baa7f86" \
-      io.registry.esignet.version="2.0.0-beta.1"
+      io.registry.esignet.revision="db528423dac7898ad546cb7b2f5f867a949676a7" \
+      io.registry.esignet.version="2.0.0"
 WORKDIR /home/mosip
 COPY --from=build --chown=65532:65532 /out/esignet /home/mosip/esignet
 COPY --from=build --chown=65532:65532 /build/esignet/upstream/esignet-service/data /home/mosip/data

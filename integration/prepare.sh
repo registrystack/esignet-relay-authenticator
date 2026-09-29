@@ -33,7 +33,7 @@ cp "$repo_root/go.mod" "$destination/provider/"
 if [[ -f "$repo_root/go.sum" ]]; then cp "$repo_root/go.sum" "$destination/provider/"; fi
 cp -R "$repo_root/provider" "$destination/provider/"
 
-# Verify the exact dependency before applying the narrowly scoped JWKS fix.
+# Verify the exact dependency before applying the reviewed runtime fixes.
 module_metadata=$(go mod download -json "$THUNDER_MODULE@$THUNDER_VERSION")
 module_sum=$(printf '%s\n' "$module_metadata" | sed -n 's/^[[:space:]]*"Sum": "\(.*\)",$/\1/p')
 [[ "$module_sum" == "$THUNDER_MODULE_SUM" ]] || { echo "Thunder module checksum mismatch" >&2; exit 1; }
@@ -41,6 +41,6 @@ module_sum=$(printf '%s\n' "$module_metadata" | sed -n 's/^[[:space:]]*"Sum": "\
 module_archive="$(go env GOMODCACHE)/cache/download/$THUNDER_MODULE/@v/$THUNDER_VERSION.zip"
 mkdir -p "$destination/thunder"
 (cd "$repo_root/integration/modulearchive" && go run . "$module_archive" "$THUNDER_MODULE@$THUNDER_VERSION" "$THUNDER_MODULE_SUM" "$destination/thunder")
-(cd "$destination/thunder" && git apply --check "$repo_root/integration/thunder.patch" && git apply "$repo_root/integration/thunder.patch")
+(cd "$destination/thunder" && git apply --check "$repo_root/integration/thunder.patch" "$repo_root/integration/thunder-consent.patch" && git apply "$repo_root/integration/thunder.patch" "$repo_root/integration/thunder-consent.patch")
 cp -R "$repo_root/integration/thunder-overlay/internal" "$destination/thunder/"
 printf '%s\n' "$service"

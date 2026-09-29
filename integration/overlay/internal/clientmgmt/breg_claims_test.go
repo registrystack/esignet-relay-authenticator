@@ -8,7 +8,7 @@ func (ts *ValidateTestSuite) TestBREGClaimsAtClientRegistration() {
 		request.ClientNameLangMap = map[string]string{"eng": "Institution service"}
 		ts.NoError(ValidateCreate(ProfileClient, request, nil), claim)
 	}
-	for _, claim := range []string{"arbitrary_registry_field", "sub", "iss", "aud"} {
+	for _, claim := range []string{"arbitrary_registry_field", "_jwt", "sub", "iss", "aud"} {
 		request := validCreateRequest()
 		request.Claims = []string{"family_name", "individual_id", claim}
 		ts.Equal("invalid_claim", errCode(ts.T(), ValidateCreate(ProfileOIDC, request, nil)), claim)

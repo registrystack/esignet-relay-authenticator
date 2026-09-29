@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.0 (2026-09-29)
+
+- Rebase the provider and companion UI onto eSignet `v2.0.0` GA at
+  `db528423dac7898ad546cb7b2f5f867a949676a7` and its embedded Thunder backend
+  `v0.0.0-20260825062603-12f517c43840`, with verified archive and module checksums.
+- Retain the Thunder RSA JWK algorithm backport, adapted to GA's explicit key
+  IDs and provider algorithm API. Preserve supported RSA signing algorithms
+  and the RS256 fallback when no algorithm is supplied.
+- Re-port the BREG factory registration and fresh-consent wiring to the GA
+  constructors. Keep the claim allowlist and log-privacy hunks unchanged; no
+  eSignet behavior hunk is dropped. The adapter contributes no external signing
+  certificates because eSignet owns BREG UserInfo signing.
+- Preserve empty consent through GA engine timeouts with a separate focused
+  Thunder patch and executor regression, keeping `individual_id` disclosure
+  conditional on the user's sharing decision.
+- Preserve the UI's English fallback and reviewed dependency updates. Drop the
+  DOMPurify 3.4.11-to-3.4.13 portion already present in GA, retaining the update
+  to 3.4.15 and verifying the resulting dependency lock checksum.
+- Freeze two public synthetic `registry-psut-v1` golden vectors computed at
+  v0.5.0, including JSON escaping of `<`, `&` and U+2028. Pairwise subject
+  derivation and consented `individual_id` release remain unchanged.
+
 ## 0.5.0 (2026-09-14)
 
 - Add an optional companion OIDC UI image from the same pinned eSignet source,
@@ -28,7 +50,7 @@ The governed BREG lookup, subject continuity and consent contracts are unchanged
 ## 0.3.0 (2026-09-09)
 
 This breaking release replaces the unused Java/Maven authenticator with a
-native Go provider integrated into eSignet `v2.0.0-beta.1` at
+native Go provider integrated into the pre-release eSignet 2.0.0 source at
 `df0d0e771dae16eb2597b8e5b5dc65e70baa7f86`.
 
 - BREG is the supported backend. A fixed governed lookup and explicit projection

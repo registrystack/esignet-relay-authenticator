@@ -1,14 +1,16 @@
-# Release v0.5.0
+# Release v0.6.0
 
-The manually dispatched release workflow publishes the native Go BREG provider
-and companion OIDC UI as separate images under `ghcr.io/registrystack`, then
-creates their shared GitHub release and source tag. It does not publish a
-`latest` image tag or change a deployment.
+The manually dispatched release workflow is configured to publish the native Go
+BREG provider and companion OIDC UI as separate images under
+`ghcr.io/registrystack`, then create their shared GitHub release and source tag.
+It does not publish a `latest` image tag or change a deployment.
 
-Version 0.5.0 adds the companion UI. Version 0.4.0 remains the historical
-provider-only release; its tag, image and assets must not be changed. The two
-0.5.0 images are `ghcr.io/registrystack/esignet-relay-authenticator:0.5.0` and
-`ghcr.io/registrystack/esignet-oidc-ui:0.5.0`.
+Version 0.6.0 updates the embedded runtime to eSignet 2.0.0 GA and Thunder
+`v0.0.0-20260825062603-12f517c43840`. Version 0.5.0 added the companion UI,
+and version 0.4.0 introduced the issuer-neutral provider. Historical tags,
+images and assets must not be changed. The two 0.6.0 images are
+`ghcr.io/registrystack/esignet-relay-authenticator:0.6.0` and
+`ghcr.io/registrystack/esignet-oidc-ui:0.6.0`.
 
 Merge the release changes into `main` and wait for the **CI** push run on that exact commit to succeed. Then dispatch the workflow from `main`:
 
@@ -35,7 +37,7 @@ GitHub authenticates an artifact attestation over both archives and their checks
 After publication, download the seven release assets into an empty directory:
 
 ```sh
-gh release download v0.5.0 --repo registrystack/esignet-relay-authenticator
+gh release download v0.6.0 --repo registrystack/esignet-relay-authenticator
 sha256sum --check esignet-breg-candidate.oci.tar.sha256 esignet-ui-candidate.oci.tar.sha256
 for artifact in esignet-{breg,ui}-candidate.oci.tar{,.metadata.json,.sha256}; do
   gh attestation verify "$artifact" \
@@ -51,8 +53,8 @@ metadata file records that component's image version, source revision and
 `image_index_digest`. Compare both published registry identities:
 
 ```sh
-skopeo inspect --raw docker://ghcr.io/registrystack/esignet-relay-authenticator:0.5.0 > provider-index.json
-skopeo inspect --raw docker://ghcr.io/registrystack/esignet-oidc-ui:0.5.0 > ui-index.json
+skopeo inspect --raw docker://ghcr.io/registrystack/esignet-relay-authenticator:0.6.0 > provider-index.json
+skopeo inspect --raw docker://ghcr.io/registrystack/esignet-oidc-ui:0.6.0 > ui-index.json
 sha256sum provider-index.json ui-index.json
 ```
 

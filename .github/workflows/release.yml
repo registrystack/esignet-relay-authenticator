@@ -1,4 +1,4 @@
-name: Release v0.5.0
+name: Release v0.6.0
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-v0.5.0
+  group: release-v0.6.0
   cancel-in-progress: false
 
 jobs:
@@ -23,11 +23,11 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: registrystack/esignet-relay-authenticator
-      RELEASE_TAG: v0.5.0
-      RELEASE_IMAGE: ghcr.io/registrystack/esignet-relay-authenticator:0.5.0
+      RELEASE_TAG: v0.6.0
+      RELEASE_IMAGE: ghcr.io/registrystack/esignet-relay-authenticator:0.6.0
       ARCHIVE: dist/esignet-breg-candidate.oci.tar
       UI_ARCHIVE: dist/esignet-ui-candidate.oci.tar
-      UI_RELEASE_IMAGE: ghcr.io/registrystack/esignet-oidc-ui:0.5.0
+      UI_RELEASE_IMAGE: ghcr.io/registrystack/esignet-oidc-ui:0.6.0
     steps:
       - name: Require the canonical main branch
         run: |
@@ -149,12 +149,13 @@ jobs:
       - name: Smoke-test the exact archive with invalid configuration
         run: |
           skopeo --override-os linux --override-arch amd64 copy \
-            "oci-archive:$PWD/$ARCHIVE" docker-daemon:esignet-release-smoke:0.5.0
+            "oci-archive:$PWD/$ARCHIVE" docker-daemon:esignet-release-smoke:0.6.0
           status=0
           docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges \
+            -e MOSIP_ESIGNET_HOST=https://esignet.example.org \
             -e MOSIP_ESIGNET_OAUTH_AUTH_CODE_LIFETIME_SECONDS=invalid \
-            esignet-release-smoke:0.5.0 > "$RUNNER_TEMP/startup-smoke.log" 2>&1 || status=$?
+            esignet-release-smoke:0.6.0 > "$RUNNER_TEMP/startup-smoke.log" 2>&1 || status=$?
           test "$status" -eq 1
           grep -Fq 'failed to load app config' "$RUNNER_TEMP/startup-smoke.log"
           grep -Fq 'invalid MOSIP_ESIGNET_OAUTH_AUTH_CODE_LIFETIME_SECONDS' "$RUNNER_TEMP/startup-smoke.log"
@@ -162,8 +163,8 @@ jobs:
       - name: Smoke-test the exact UI archive
         run: |
           skopeo --override-os linux --override-arch amd64 copy \
-            "oci-archive:$PWD/$UI_ARCHIVE" docker-daemon:esignet-ui-release-smoke:0.5.0
-          ./ui/smoke.sh esignet-ui-release-smoke:0.5.0
+            "oci-archive:$PWD/$UI_ARCHIVE" docker-daemon:esignet-ui-release-smoke:0.6.0
+          ./ui/smoke.sh esignet-ui-release-smoke:0.6.0
       - name: Audit locked UI production dependencies
         run: ./integration/audit-ui.sh
       - name: Attest release archive and sidecars
@@ -178,7 +179,7 @@ jobs:
       - name: Retain the exact release bytes for recovery
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: esignet-v0.5.0-${{ github.sha }}
+          name: esignet-v0.6.0-${{ github.sha }}
           path: dist/
           if-no-files-found: error
           retention-days: 30
@@ -199,10 +200,11 @@ jobs:
           gh api --method POST "repos/$GH_REPO/git/refs" \
             -f ref="refs/tags/$RELEASE_TAG" -f sha="$GITHUB_SHA" > /dev/null
           cat > "$RUNNER_TEMP/release-notes.md" <<EOF_NOTES
-          Native Go BREG authentication provider for pinned eSignet 2.0.0-beta.1.
-          Adds an optional companion UI built from the same pinned eSignet source.
-          The provider retains issuer-neutral token_client credentials and the opt-in,
-          transaction-bound synthetic Mailpit verifier introduced in v0.4.0.
+          Native Go BREG authentication provider for pinned eSignet 2.0.0 GA.
+          Updates the embedded Thunder backend to v0.0.0-20260825062603-12f517c43840.
+          Version 0.5.0 added the optional companion UI built from the same pinned
+          eSignet source. Version 0.4.0 introduced the issuer-neutral provider.
+          The provider retains the opt-in, transaction-bound synthetic Mailpit verifier.
           See README and CHANGELOG when upgrading from earlier versions.
           Production OTP delivery remains outside this provider artifact.
 
@@ -223,4 +225,5 @@ jobs:
             "$ARCHIVE" "$ARCHIVE.sha256" "$ARCHIVE.metadata.json" \
             "$UI_ARCHIVE" "$UI_ARCHIVE.sha256" "$UI_ARCHIVE.metadata.json" dist/attestation.intoto.jsonl
           gh release edit "$RELEASE_TAG" --draft=false
+          # shellcheck disable=SC2016 # The format string contains literal Markdown backticks.
           printf 'Released source `%s` as `%s@%s` and `%s@%s`.\n' "$GITHUB_SHA" "${RELEASE_IMAGE%:*}" "$RELEASE_DIGEST" "${UI_RELEASE_IMAGE%:*}" "$UI_RELEASE_DIGEST" >> "$GITHUB_STEP_SUMMARY"

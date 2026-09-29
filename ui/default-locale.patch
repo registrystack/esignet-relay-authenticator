@@ -1,12 +1,13 @@
 diff --git a/oidc-ui/src/main.tsx b/oidc-ui/src/main.tsx
+index f486844..49ca154 100644
 --- a/oidc-ui/src/main.tsx
 +++ b/oidc-ui/src/main.tsx
-@@ -16,7 +16,7 @@ const applicationId = searchParams.get("applicationId");
- // ui_locales (OIDC) is a space-separated, preference-ordered locale list; take
- // the most preferred one and let the backend fall back to English if unsupported.
- const uiLocales = searchParams.get("ui_locales");
--const initialLanguage = uiLocales?.trim().split(/\s+/)[0] || undefined;
-+const initialLanguage = uiLocales?.trim().split(/\s+/)[0] || "en";
+@@ -21,7 +21,7 @@ const uiLocalesLanguage = uiLocales?.trim().split(/\s+/)[0] || undefined;
+ 
+ // Fallback to DEFAULT_LANG environment variable if ui_locales is not provided or empty.
+ const defaultLanguage = (window as any)._env_?.DEFAULT_LANG || undefined;
+-const initialLanguage = uiLocalesLanguage || defaultLanguage || undefined;
++const initialLanguage = uiLocalesLanguage || defaultLanguage || "en";
  
  const baseUrlRaw = import.meta.env.DEV
    ? import.meta.env.VITE_API_URL

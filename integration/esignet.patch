@@ -8,8 +8,10 @@
  	"github.com/mosip/esignet/internal/engine/mock"
  	"github.com/mosip/esignet/internal/engine/mosip"
  	"github.com/mosip/esignet/internal/engine/shared"
-@@ -33,6 +34,8 @@
+@@ -36,8 +37,10 @@
  	shared.ConsolidatedAuthnProvider, providers.ObservabilityProvider, error) {
+ 
+ 	httpClient := config.NewHTTPClient(appConfig.OutboundIDSystemHTTPClient)
  
  	switch appConfig.Provider {
 +	case "breg":
@@ -35,15 +37,15 @@
  	"github.com/mosip/esignet/internal/engine/executors"
  	"github.com/mosip/esignet/internal/engine/runtimestores"
  	"github.com/mosip/esignet/internal/httpmiddleware"
-@@ -143,7 +144,7 @@
+@@ -161,7 +162,7 @@
  		thunderidengine.WithActorProvider(engine.NewActorProvider(clientSvc, appCfg)),
  		thunderidengine.WithDefaultAuthnProvider(authnProvider),
  		thunderidengine.WithAuthorizationProvider(engine.NewAuthorizationProvider(appCfg)),
--		thunderidengine.WithConsentProvider(engine.NewConsentProvider(consentmgmt.NewService(pgConn), appCfg)),
-+		thunderidengine.WithConsentProvider(breg.WithFreshConsent(appCfg.Provider, engine.NewConsentProvider(consentmgmt.NewService(pgConn), appCfg))),
+-		thunderidengine.WithConsentProvider(engine.NewConsentProvider(consentmgmt.NewService(pgConn), clientSvc, appCfg)),
++		thunderidengine.WithConsentProvider(breg.WithFreshConsent(appCfg.Provider, engine.NewConsentProvider(consentmgmt.NewService(pgConn), clientSvc, appCfg))),
  		thunderidengine.WithDesignResolveProvider(engine.NewDesignProvider(appCfg, runtimeStore, appCfg.DesignCacheTTLSecs)),
  		thunderidengine.WithFlowProvider(engine.NewFlowProvider(appCfg, runtimeStore, appCfg.FlowCacheTTLSecs)),
- 		thunderidengine.WithI18nProvider(engine.NewI18nProvider(appCfg)),
+ 		thunderidengine.WithI18nProvider(engine.NewI18nProvider(appCfg, clientSvc)),
 --- a/internal/clientmgmt/validate.go
 +++ b/internal/clientmgmt/validate.go
 @@ -15,9 +15,11 @@

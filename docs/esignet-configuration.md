@@ -5,6 +5,11 @@ Select `MOSIP_ESIGNET_AUTHN_PROVIDER=breg` and mount the file named by
 and secret files are read during provider construction; restart after rotation.
 There are no Spring or legacy Java property aliases.
 
+Set `MOSIP_ESIGNET_HOST` to the externally visible eSignet URL, for example
+`https://esignet.example.org`. GA uses it to expand resource-server identifiers
+in the bundled `deployment.yaml`; an unset host makes those identifiers relative
+and startup rejects them.
+
 ```yaml
 subject_id_type: uin
 psut_secret_file: /run/secrets/registry-psut
