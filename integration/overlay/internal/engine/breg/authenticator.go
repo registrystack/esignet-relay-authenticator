@@ -8,9 +8,9 @@ import (
 	"errors"
 	"sort"
 
-	core "github.com/registrystack/esignet-relay-authenticator/provider"
 	"github.com/mosip/esignet/internal/clientmgmt"
 	"github.com/mosip/esignet/internal/engine/shared"
+	core "github.com/registrystack/esignet-relay-authenticator/provider"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 )
@@ -186,6 +186,11 @@ func providerError(err error) *common.ServiceError {
 func (*authenticator) GetEntityReference(context.Context, any) (*providers.EntityReference, *common.ServiceError) {
 	// Authentication returns the resolved reference, so no identity lookup is needed here.
 	return nil, shared.InvalidRequestError
+}
+func (*authenticator) GetSigningCertificates(context.Context) ([]shared.CertificateData, *common.ServiceError) {
+	// BREG returns plain attributes. eSignet owns their UserInfo signing keys,
+	// so this identity provider contributes no external signing certificates.
+	return nil, nil
 }
 func (*authenticator) InitiateAuthentication(context.Context, string, any, *providers.AuthnMetadata) (any, *common.ServiceError) {
 	return nil, shared.NotImplementedError

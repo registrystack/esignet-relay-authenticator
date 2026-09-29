@@ -16,13 +16,13 @@ ARG CANDIDATE_SOURCE_SHA256=unrecorded
 ARG CANDIDATE_SOURCE_REVISION=unknown
 ARG CANDIDATE_SOURCE_STATE=unrecorded
 LABEL org.opencontainers.image.source="https://github.com/registrystack/esignet-relay-authenticator" \
-      org.opencontainers.image.version="0.5.0" \
+      org.opencontainers.image.version="0.6.0" \
       org.opencontainers.image.revision=$CANDIDATE_SOURCE_REVISION \
       io.registry.source.sha256=$CANDIDATE_SOURCE_SHA256 \
       io.registry.source.state=$CANDIDATE_SOURCE_STATE \
       io.registry.esignet.source="https://github.com/mosip/esignet" \
-      io.registry.esignet.revision="df0d0e771dae16eb2597b8e5b5dc65e70baa7f86" \
-      io.registry.esignet.version="2.0.0-beta.1"
+      io.registry.esignet.revision="db528423dac7898ad546cb7b2f5f867a949676a7" \
+      io.registry.esignet.version="2.0.0"
 WORKDIR /home/mosip
 COPY --from=build --chown=65532:65532 /out/esignet /home/mosip/esignet
 COPY --from=build --chown=65532:65532 /build/esignet/upstream/esignet-service/data /home/mosip/data

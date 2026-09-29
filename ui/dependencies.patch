@@ -1,5 +1,5 @@
 diff --git a/oidc-ui/package-lock.json b/oidc-ui/package-lock.json
-index 1935c6a..693a830 100644
+index 0fe3ad1..cf0ed52 100644
 --- a/oidc-ui/package-lock.json
 +++ b/oidc-ui/package-lock.json
 @@ -33,7 +33,7 @@
@@ -267,9 +267,9 @@ index 1935c6a..693a830 100644
        "license": "MIT"
      },
      "node_modules/dompurify": {
--      "version": "3.4.11",
--      "resolved": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.11.tgz",
--      "integrity": "sha512-zhlUV12GsaRzMsf9q5M254YhA4+VuF0fG+QFqu6aYpoGlKtz+w8//jBcGVYBgQkR5GHjUomejY84AV+/uPbWdw==",
+-      "version": "3.4.13",
+-      "resolved": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.13.tgz",
+-      "integrity": "sha512-2vmYIoqjze2d+kakP8S/nS5shfsl587kzwEjcGlTdiksUVgFHnFCsLYDVj/JNqJVOQZGSYBTmuycv0PodwmnMQ==",
 +      "version": "3.4.15",
 +      "resolved": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.15.tgz",
 +      "integrity": "sha512-EUBjM+B+lkDE41iE82DDSCfkoPGfXx8IxFxPMjNzm/Uk4xDet77rTN9wqlxlVg71kK7XGuUMv6wUxJUwwv+Xyw==",
@@ -553,10 +553,10 @@ index 1935c6a..693a830 100644
          "jsdom": "*",
          "vite": "^6.0.0 || ^7.0.0 || ^8.0.0"
 diff --git a/oidc-ui/package.json b/oidc-ui/package.json
-index fc5afb7..a5c2b4d 100644
+index f12f3a4..6856fb0 100644
 --- a/oidc-ui/package.json
 +++ b/oidc-ui/package.json
-@@ -39,7 +39,7 @@
+@@ -40,7 +40,7 @@
      "@types/react-dom": "^19.2.3",
      "@types/react-google-recaptcha": "^2.1.9",
      "@vitejs/plugin-react": "^6.0.1",
@@ -565,7 +565,7 @@ index fc5afb7..a5c2b4d 100644
      "autoprefixer": "^10.5.0",
      "eslint": "^10.3.0",
      "eslint-config-prettier": "^10.1.8",
-@@ -54,6 +54,9 @@
+@@ -55,6 +55,9 @@
      "typescript": "~6.0.2",
      "typescript-eslint": "^8.58.2",
      "vite": "^8.0.10",

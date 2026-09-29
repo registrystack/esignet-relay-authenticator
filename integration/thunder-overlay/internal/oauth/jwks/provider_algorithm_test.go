@@ -20,7 +20,7 @@ type algorithmProvider struct {
 }
 
 func (p algorithmProvider) GetPublicKeys(context.Context, providers.PublicKeyFilter) ([]providers.PublicKeyInfo, error) {
-	return []providers.PublicKeyInfo{{PublicKey: p.key, Algorithm: p.algorithm, Thumbprint: "test-key"}}, nil
+	return []providers.PublicKeyInfo{{PublicKey: p.key, Algorithm: p.algorithm, KeyID: "test-key", Thumbprint: "test-key"}}, nil
 }
 
 func TestProviderRSAAlgorithmSelectsAndVerifiesSignedJWT(t *testing.T) {
@@ -28,15 +28,17 @@ func TestProviderRSAAlgorithmSelectsAndVerifiesSignedJWT(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, algorithm := range []string{"PS256", "RS256", "RS512"} {
-		t.Run(algorithm, func(t *testing.T) {
-			service := newJWKSService(algorithmProvider{key: &key.PublicKey, algorithm: algorithm})
+	for _, tc := range []struct{ provider, signing string }{
+		{"PS256", "PS256"}, {"RS256", "RS256"}, {"RS512", "RS512"}, {"", "RS256"},
+	} {
+		t.Run("provider_"+tc.provider, func(t *testing.T) {
+			service := newJWKSService(algorithmProvider{key: &key.PublicKey, algorithm: tc.provider})
 			published, serviceErr := service.GetJWKS(context.Background())
 			if serviceErr != nil || len(published.Keys) != 1 {
 				t.Fatal("public key unavailable")
 			}
 			jwk := published.Keys[0]
-			if jwk.Alg != algorithm {
+			if jwk.Alg != tc.signing {
 				t.Fatal("JWKS algorithm does not match provider signing algorithm")
 			}
 			n, err := base64.RawURLEncoding.DecodeString(jwk.N)
@@ -48,7 +50,7 @@ func TestProviderRSAAlgorithmSelectsAndVerifiesSignedJWT(t *testing.T) {
 				t.Fatal(err)
 			}
 			publicKey := &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(new(big.Int).SetBytes(e).Int64())}
-			token := jwt.NewWithClaims(jwt.GetSigningMethod(algorithm), jwt.MapClaims{"sub": "synthetic-subject"})
+			token := jwt.NewWithClaims(jwt.GetSigningMethod(tc.signing), jwt.MapClaims{"sub": "synthetic-subject"})
 			token.Header["kid"] = "test-key"
 			encoded, err := token.SignedString(key)
 			if err != nil {
@@ -59,7 +61,7 @@ func TestProviderRSAAlgorithmSelectsAndVerifiesSignedJWT(t *testing.T) {
 					return nil, errors.New("no matching signing key")
 				}
 				return publicKey, nil
-			}, jwt.WithValidMethods([]string{algorithm}))
+			}, jwt.WithValidMethods([]string{tc.signing}))
 			if err != nil || !parsed.Valid {
 				t.Fatal("published key cannot select and verify emitted JWT")
 			}
