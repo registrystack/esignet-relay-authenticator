@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"testing"
 
-	core "github.com/registrystack/esignet-relay-authenticator/provider"
 	"github.com/mosip/esignet/internal/clientmgmt"
 	"github.com/mosip/esignet/internal/engine/shared"
+	core "github.com/registrystack/esignet-relay-authenticator/provider"
 	"github.com/stretchr/testify/suite"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
@@ -43,7 +43,8 @@ func (f *fakeIdentity) GetAttributes(_ context.Context, state map[string]any, bi
 	if state["client"] != binding.ClientID || state["transaction"] != binding.TransactionID {
 		return nil, core.ErrContextInvalid
 	}
-	return map[string]any{"name": "Example Person", "email": "not-approved@example.test"}, f.err
+	return map[string]any{"name": "Example Person", "email": "not-approved@example.test",
+		providers.RawJWTAttributeKey: "unapproved-envelope-canary"}, f.err
 }
 
 type AdapterSuite struct {
@@ -90,6 +91,7 @@ func (s *AdapterSuite) TestOTPToConsentJSONRoundTrip() {
 	s.Require().Nil(err)
 	s.Len(attrs.Attributes, 1)
 	s.Equal("Example Person", attrs.Attributes["name"].Value)
+	s.NotContains(attrs.Attributes, providers.RawJWTAttributeKey)
 	s.Equal(s.identity.sends[0].Binding, s.identity.auths[0].Binding)
 	s.Equal(s.identity.auths[0].Binding, s.identity.bindings[0])
 	s.Equal([]string{"name"}, s.identity.requested[0])

@@ -12,6 +12,9 @@
   constructors. Keep the claim allowlist and log-privacy hunks unchanged; no
   eSignet behavior hunk is dropped. The adapter contributes no external signing
   certificates because eSignet owns BREG UserInfo signing.
+- Preserve empty consent through GA engine timeouts with a separate focused
+  Thunder patch and executor regression, keeping `individual_id` disclosure
+  conditional on the user's sharing decision.
 - Preserve the UI's English fallback and reviewed dependency updates. Drop the
   DOMPurify 3.4.11-to-3.4.13 portion already present in GA, retaining the update
   to 3.4.15 and verifying the resulting dependency lock checksum.

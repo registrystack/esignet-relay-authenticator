@@ -224,4 +224,5 @@ jobs:
             "$ARCHIVE" "$ARCHIVE.sha256" "$ARCHIVE.metadata.json" \
             "$UI_ARCHIVE" "$UI_ARCHIVE.sha256" "$UI_ARCHIVE.metadata.json" dist/attestation.intoto.jsonl
           gh release edit "$RELEASE_TAG" --draft=false
+          # shellcheck disable=SC2016 # The format string contains literal Markdown backticks.
           printf 'Released source `%s` as `%s@%s` and `%s@%s`.\n' "$GITHUB_SHA" "${RELEASE_IMAGE%:*}" "$RELEASE_DIGEST" "${UI_RELEASE_IMAGE%:*}" "$UI_RELEASE_DIGEST" >> "$GITHUB_STEP_SUMMARY"

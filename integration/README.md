@@ -22,6 +22,11 @@ explicit key ID. The retained patch preserves the RSA signing-algorithm checks
 and the RS256 fallback when the provider omits its algorithm. The regression
 uses GA's key ID field and checks that fallback as well as PS256, RS256 and RS512.
 
+`thunder-consent.patch` preserves empty consented attributes through the GA
+engine's timeout handling. An explicit empty result cannot fall back to the
+original requested claims. Executor regressions cover the timeout-to-assertion
+transition and retain the pairwise subject without demographic disclosure.
+
 The patch registers the BREG authentication provider and applies fresh consent to
 BREG sign-ins. It also adds exactly two names to the host's static client claim
 allowlist: standard OIDC `family_name` and institution business claim
