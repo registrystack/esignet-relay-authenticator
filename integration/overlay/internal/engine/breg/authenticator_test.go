@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/mosip/esignet/internal/clientmgmt"
+	"github.com/mosip/esignet/internal/config"
+	"github.com/mosip/esignet/internal/engine/executors"
 	"github.com/mosip/esignet/internal/engine/shared"
 	core "github.com/registrystack/esignet-relay-authenticator/provider"
 	"github.com/stretchr/testify/suite"
@@ -95,6 +97,29 @@ func (s *AdapterSuite) TestOTPToConsentJSONRoundTrip() {
 	s.Equal(s.identity.sends[0].Binding, s.identity.auths[0].Binding)
 	s.Equal(s.identity.auths[0].Binding, s.identity.bindings[0])
 	s.Equal([]string{"name"}, s.identity.requested[0])
+}
+
+// The host does not store the id SendOTP returns. Its seed executor is the only
+// source of the transaction binding that Authenticate and GetAttributes require.
+func (s *AdapterSuite) TestHostSeedBindsWholeSignIn() {
+	node := &providers.NodeContext{Context: context.Background(), ExecutionID: "0199183a-8f2e-7abc-def0-123456789abc"}
+	node.SetInitiatorRequest(&providers.InitiatorRequest{QueryParams: map[string][]string{"client_id": {"client-a"}}})
+	_, execErr := executors.NewTransactionIDExecutor(&config.AppConfig{}).Execute(node)
+	s.Require().NoError(execErr)
+	seeded := node.RuntimeData[shared.TransactionIDKey]
+	s.Require().NotEmpty(seeded)
+
+	ctx := context.Background()
+	sent, err := s.adapter.SendOTP(ctx, map[string]any{"username": "1234567890"}, executors.BuildProviderMetadata(node))
+	s.Require().Nil(err)
+	s.Equal(seeded, sent.TransactionID)
+	auth, err := s.adapter.Authenticate(ctx, map[string]any{"username": "1234567890"}, map[string]any{"otp": "123456"}, executors.BuildProviderMetadata(node))
+	s.Require().Nil(err)
+	_, err = s.adapter.GetAttributes(ctx, auth.AttributeToken, &providers.RequestedAttributes{Attributes: map[string]*providers.AttributeMetadataRequest{"name": nil}}, executors.BuildGetAttributesMetadata(node))
+	s.Require().Nil(err)
+	s.Equal(seeded, s.identity.sends[0].Binding.TransactionID)
+	s.Equal(s.identity.sends[0].Binding, s.identity.auths[0].Binding)
+	s.Equal(s.identity.auths[0].Binding, s.identity.bindings[0])
 }
 func (s *AdapterSuite) TestEmptyConsentNeverReleasesClaims() {
 	state := map[string]any{"client": "client-a", "transaction": "tx"}

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.1 (2026-10-01)
+
+- Restore BREG OTP sign-in on the eSignet 2.0.0 GA host. The bundled
+  `flow-breg-otp` now runs `eSignetTransactionIDExecutor` immediately after
+  `START`, as the upstream flows do. GA no longer stores the transaction id
+  returned by `SendOTP`, so 0.6.0 rejected every verification before reaching
+  BREG and reported invalid credentials (`FET-1005`).
+- Add a flow regression requiring the seed before any task on every path, and
+  an adapter regression binding the challenge, account check and attribute
+  retrieval to the host-seeded id.
+- Document that the `individual_id` client claim allowlist entry is host-wide,
+  so a deployment that must never release it relies on its provider claim map.
+
 ## 0.6.0 (2026-09-29)
 
 - Rebase the provider and companion UI onto eSignet `v2.0.0` GA at
