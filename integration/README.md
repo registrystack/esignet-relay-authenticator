@@ -34,7 +34,15 @@ allowlist: standard OIDC `family_name` and institution business claim
 explicitly requested and consented business identifier. It does not replace the
 pairwise OIDC `sub`. Registration still rejects arbitrary claim names; configuring
 either added claim does not release its value without the provider mapping and
-the user's consent.
+the user's consent. The allowlist is host-wide, so any client registered through
+client management may request `individual_id`. A deployment that must never
+release it relies on omitting it from the provider `claim_map`; its own client
+registration tooling can additionally refuse the claim.
+
+The bundled flow seeds the host transaction id with `eSignetTransactionIDExecutor`
+immediately after `START`. The adapter binds the challenge, account check and
+attribute retrieval to that id, so a custom flow must run the same seed before
+any task that reaches the provider.
 
 The BREG consent wrapper translates the host's essential-refusal error into the
 pinned engine's recognized error code, stopping the flow without code issuance.
@@ -56,7 +64,7 @@ attestations. It never pushes an image. The Dockerfile retains the original
 upstream license and third-party notices under `/licenses/esignet`.
 
 For a native local image, run `./integration/build.sh --load`. This loads
-`esignet-relay-authenticator:0.6.0-candidate` into the current Linux Docker daemon
+`esignet-relay-authenticator:0.6.1-candidate` into the current Linux Docker daemon
 without changing any running service. Use `--help` for the two output modes.
 
 The build wrapper uses Python 3 to compute a deterministic SHA-256 over the
