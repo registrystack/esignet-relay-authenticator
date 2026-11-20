@@ -3,7 +3,9 @@ package provider
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -32,7 +34,12 @@ func (m *messagingFixture) storedState() string {
 	sort.Strings(entries)
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return fmt.Sprintf("pending=%d people=[%s]", len(v.pending), strings.Join(entries, "; "))
+	var held []string
+	for _, c := range v.pending {
+		held = append(held, fmt.Sprintf("attempts=%d hold=%d", c.attempts, c.hold.Unix()))
+	}
+	sort.Strings(held)
+	return fmt.Sprintf("pending=[%s] people=[%s]", strings.Join(held, "; "), strings.Join(entries, "; "))
 }
 
 // The relay's stored state and its BREG traffic are a function of the requests
@@ -172,7 +179,7 @@ func TestMessagingStoreCheckIgnoresTheCandidate(t *testing.T) {
 			m := newMessagingFixture(t, func(c *Config) { c.Messaging.MaxPendingCodes = 3 })
 			v := m.verifier()
 			for i := 0; i < 2; i++ {
-				v.pending[challengeKey{identifier: fmt.Sprintf("filler-%d", i)}] = challenge{expires: m.clock().Add(time.Minute)}
+				v.pending[challengeKey{identifier: fmt.Sprintf("filler-%d", i)}] = entry{hold: m.clock().Add(time.Minute)}
 			}
 			m.setLookup(lookup)
 			r := otpRequest("email")
@@ -239,7 +246,7 @@ func TestMessagingSweepRunsOncePerSecond(t *testing.T) {
 	}
 	// An expired entry planted after the first sweep survives until the next one.
 	v.mu.Lock()
-	v.pending[challengeKey{identifier: "expired"}] = challenge{expires: m.clock().Add(-time.Second)}
+	v.pending[challengeKey{identifier: "expired"}] = entry{hold: m.clock().Add(-time.Second)}
 	v.mu.Unlock()
 	other := otpRequest("email")
 	other.Identifier = "someone-else"
@@ -274,15 +281,15 @@ func TestMessagingResendCooldownCoversASend(t *testing.T) {
 	m := newMessagingFixture(t, nil)
 	c := m.fixture.config
 	mc := *c.Messaging
-	mc.ResendCooldownSeconds = 1
+	mc.ResendCooldownSeconds = 2
 	c.Messaging = &mc
 	_, err := New(c)
 	if err == nil || !strings.Contains(err.Error(), "messaging.resend_cooldown_seconds") || !strings.Contains(err.Error(), "http.timeout_seconds") {
-		t.Fatalf("a cooldown shorter than twice the HTTP timeout must be refused, naming both keys: %v", err)
+		t.Fatalf("a cooldown shorter than three times the HTTP timeout must be refused, naming both keys: %v", err)
 	}
-	mc.ResendCooldownSeconds = 2
+	mc.ResendCooldownSeconds = 3
 	if _, err := New(c); err != nil {
-		t.Fatalf("a cooldown of twice the timeout is allowed: %v", err)
+		t.Fatalf("a cooldown of three times the timeout is allowed: %v", err)
 	}
 }
 
@@ -321,5 +328,91 @@ func TestOperatorSignalPanicIsContained(t *testing.T) {
 	}
 	if got := logged.String(); !strings.Contains(got, "operator signal callback panicked") || strings.Contains(got, "callback failure") {
 		t.Fatalf("a contained panic is reported once, without its value: %q", got)
+	}
+}
+
+// knownOnly makes BREG answer for the listed identifiers and 404 for the rest.
+func (m *messagingFixture) knownOnly(known ...string) {
+	m.fixture.handler = func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body struct {
+			Values map[string]string `json:"values"`
+		}
+		_ = json.Unmarshal(raw, &body)
+		id := body.Values["uin"]
+		for _, k := range known {
+			if k == id {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"domainData": map[string]any{"uin": id, "status": "active", "email-address": "a@example.test"}}})
+				return
+			}
+		}
+		unknownPerson(w)
+	}
+}
+
+// Wrong codes between resends count the same for a known and an unknown person,
+// so the failure lock, the attempts left and the BREG traffic of the next
+// request do not reveal who exists.
+func TestMessagingFailureLockDoesNotDependOnWhoExists(t *testing.T) {
+	var got [2]string
+	for n, id := range []string{"known-1", "nobody"} {
+		m := newMessagingFixture(t, nil)
+		m.knownOnly("known-1")
+		r := otpRequest("email")
+		r.Identifier = id
+		wrong := func(k int) {
+			for i := 0; i < k; i++ {
+				_ = m.p.verifier.Verify(context.Background(), ChallengeRequest{Identifier: id, IdentifierType: "uin", Binding: r.Binding, Challenge: "000000"})
+			}
+		}
+		send := func() int32 {
+			before := m.lookupCalls.Load()
+			if err := m.p.SendOTP(context.Background(), r); err != nil {
+				t.Fatal(err)
+			}
+			m.verifier().wait()
+			return m.lookupCalls.Load() - before
+		}
+		send()
+		wrong(4)
+		m.advance(61 * time.Second)
+		send()
+		wrong(6)
+		m.advance(61 * time.Second)
+		send()
+		wrong(1)
+		state := m.storedState()
+		r.Binding.TransactionID = "fresh-transaction"
+		got[n] = fmt.Sprintf("state=%s next request lookups=%d", state, send())
+	}
+	if got[0] != got[1] {
+		t.Fatalf("known:   %s\nunknown: %s", got[0], got[1])
+	}
+}
+
+// A resend holds a known person's entry for the same time as an unknown
+// person's, so the store's fill level at the end of the hold does not differ.
+func TestMessagingEntryHoldDoesNotDependOnWhoExists(t *testing.T) {
+	var got [2]string
+	for n, id := range []string{"known-1", "nobody"} {
+		m := newMessagingFixture(t, func(c *Config) { c.Messaging.MaxPendingCodes = 2 })
+		m.knownOnly("known-1", "attacker")
+		r := otpRequest("email")
+		r.Identifier = id
+		_ = m.p.SendOTP(context.Background(), r)
+		m.advance(61 * time.Second)
+		_ = m.p.SendOTP(context.Background(), r)
+		m.verifier().wait()
+		m.advance(200 * time.Second)
+		a := otpRequest("email")
+		a.Identifier = "attacker"
+		a.Binding.TransactionID = "fill"
+		fill := m.p.SendOTP(context.Background(), a)
+		m.advance(45 * time.Second)
+		a.Binding.TransactionID = "observe"
+		got[n] = fmt.Sprintf("fill=%v observe=%v", fill, m.p.SendOTP(context.Background(), a))
+	}
+	if got[0] != got[1] {
+		t.Fatalf("known: %s, unknown: %s", got[0], got[1])
 	}
 }

@@ -152,9 +152,9 @@ messaging:
 | `base_url` | Messaging's URL. HTTPS unless `http.allow_insecure_http` is set. |
 | `token_resource`, `token_scopes` | The resource and scopes requested for the Messaging access token. The issuer must set Messaging's audience for them. |
 | `code_ttl_seconds` | Code lifetime. Default 300, from 60 to 900. |
-| `resend_cooldown_seconds` | Minimum gap between sends to one person on one transaction. Default 60, up to 3600, and at least twice `http.timeout_seconds` (20 with the default timeout), so two sends for one person never overlap. A smaller value is refused at startup. |
+| `resend_cooldown_seconds` | Minimum gap between sends to one person on one transaction. Default 60, up to 3600, and at least three times `http.timeout_seconds` (30 with the default timeout), because the BREG lookup and the send can each take that long and two sends for one person must never overlap. A smaller value is refused at startup. |
 | `max_sends_per_hour` | Sends to one person in any hour, across transactions. Default 5, from 1 to 60. |
-| `max_tracked_people` | People the limiter tracks at once. Default 100000, from 1 to 10000000. |
+| `max_tracked_people` | People the limiter tracks at once. Default 100000, from 1 to 1000000. |
 | `max_pending_codes` | Pending entries at once, one per admitted request. Default 100000, from 1 to 1000000. |
 | `contact_fields` | The BREG field holding the contact for each channel. Each must appear in `breg.provisioned_fields`. |
 | `channels` | One entry per offered channel, `email` or `phone`. Only configured channels are advertised to eSignet. |
@@ -219,6 +219,10 @@ process. A restart clears them.
 Every admitted request stores one pending entry and counts against its person,
 whether or not a message is sent, so neither bound reveals who exists. The
 limiter and the store are pruned at most once a second, not on every request.
+The prune is linear in the tracked entries and runs under the limiter lock. It
+takes about 27 ms at 100000 people and 600 ms at 1000000 on a development
+machine, which is why `max_tracked_people` stops at 1000000. Scale out rather
+than up.
 
 Practical ceilings. At the default of 100000 people, a deployment signs in about
 28 distinct people a second sustained over an hour (100000 divided by 3600). A

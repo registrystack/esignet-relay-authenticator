@@ -141,7 +141,7 @@ func TestMailpitAttemptsAndCapacity(t *testing.T) {
 		t.Fatal("code accepted after attempt limit")
 	}
 	for i := 0; i < defaultMaxPendingCodes; i++ {
-		v.pending[challengeKey{identifier: fmt.Sprintf("%d", i)}] = challenge{expires: time.Now().Add(time.Minute)}
+		v.pending[challengeKey{identifier: fmt.Sprintf("%d", i)}] = entry{hold: time.Now().Add(time.Minute)}
 	}
 	if err := v.SendOTP(context.Background(), r); err != ErrUnavailable {
 		t.Fatal("pending challenge bound ignored")

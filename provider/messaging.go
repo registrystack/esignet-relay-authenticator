@@ -181,8 +181,9 @@ func (v *messagingVerifier) SendOTP(ctx context.Context, r OTPRequest) error {
 }
 
 // deliver runs one Messaging call on a context of its own. The call lasts at
-// most twice the HTTP timeout, which the resend cooldown must cover, so two
-// sends for one person and binding never overlap.
+// most twice the HTTP timeout. With the BREG lookup before it, a request lives
+// at most three timeouts, which the resend cooldown must cover, so two sends
+// for one person and binding never overlap.
 func (v *messagingVerifier) deliver(ctx context.Context, key challengeKey, c, previous challenge, replaced bool, channel, contact, code string) {
 	defer v.sends.Done()
 	defer func() { <-v.slots }()

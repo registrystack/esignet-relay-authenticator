@@ -16,7 +16,7 @@
   ends. Limiter entries are keyed by an HMAC of the identifier. The limiter and
   the pending store are bounded, by `max_tracked_people` and `max_pending_codes`
   (both default 100000), refuse every request when full, and are pruned at most
-  once a second. `resend_cooldown_seconds` must be at least twice
+  once a second. `resend_cooldown_seconds` must be at least three times
   `http.timeout_seconds`. The shipped image logs one fixed line per operator
   event kind. Messaging keeps the
   rendered message for its payload retention period, so database readers,

@@ -26,10 +26,18 @@ type challengeKey struct {
 
 // challenge holds a salted digest of a code, never the code itself.
 type challenge struct {
-	digest   [32]byte
-	salt     [16]byte
-	expires  time.Time
+	digest  [32]byte
+	salt    [16]byte
+	expires time.Time
+}
+
+// entry is what the store keeps for a key. The held challenge is only a value.
+// The bookkeeping (attempts used, and the time the entry is held until) is set
+// by every admitted request alone, whatever value the request leaves behind.
+type entry struct {
+	challenge
 	attempts int
+	hold     time.Time
 }
 
 // challengeStore issues and checks single-use codes. Pending challenges live in
@@ -46,11 +54,11 @@ type challengeStore struct {
 	maxPending int
 	now        func() time.Time
 	mu         sync.Mutex
-	pending    map[challengeKey]challenge
+	pending    map[challengeKey]entry
 }
 
 func newChallengeStore(ttl time.Duration, maxPending int) *challengeStore {
-	return &challengeStore{ttl: ttl, maxPending: maxPending, now: time.Now, pending: make(map[challengeKey]challenge)}
+	return &challengeStore{ttl: ttl, maxPending: maxPending, now: time.Now, pending: make(map[challengeKey]entry)}
 }
 
 // full reports whether the store is at its bound. It looks only at the count,
@@ -62,13 +70,13 @@ func (s *challengeStore) full() bool {
 	return len(s.pending) >= s.maxPending
 }
 
-// sweep drops expired challenges.
+// sweep drops entries whose hold time has passed.
 func (s *challengeStore) sweep() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
 	for k, c := range s.pending {
-		if !now.Before(c.expires) {
+		if !now.Before(c.hold) {
 			delete(s.pending, k)
 		}
 	}
@@ -92,32 +100,39 @@ func (s *challengeStore) generate() (string, challenge, error) {
 
 func (s *challengeStore) put(k challengeKey, c challenge) { s.swap(k, c) }
 
-// swap stores c and returns the challenge it replaced, if any.
+// swap stores c and returns the value it replaced, if any. The entry starts
+// with no attempts used and is held for one TTL from now.
 func (s *challengeStore) swap(k challengeKey, c challenge) (previous challenge, replaced bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	previous, replaced = s.pending[k]
-	s.pending[k] = c
-	return previous, replaced
+	current, ok := s.pending[k]
+	replaced = ok && s.now().Before(current.hold)
+	s.pending[k] = entry{challenge: c, hold: s.now().Add(s.ttl)}
+	return current.challenge, replaced
 }
 
-// keep stores c only when the key holds no live challenge. A request that sends
-// nothing uses it, so the entry count matches a request that did send.
+// keep leaves the value a key already holds and stores c only when it holds
+// none. A request that sends nothing uses it, so the entry's attempts and hold
+// time match a request that did send.
 func (s *challengeStore) keep(k challengeKey, c challenge) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if current, ok := s.pending[k]; !ok || !s.now().Before(current.expires) {
-		s.pending[k] = c
+	value := c
+	if current, ok := s.pending[k]; ok && s.now().Before(current.hold) {
+		value = current.challenge
 	}
+	s.pending[k] = entry{challenge: value, hold: s.now().Add(s.ttl)}
 }
 
-// restore puts back the value mine replaced. It never adds or removes an entry,
-// and does nothing once another request has replaced mine.
+// restore puts back the value mine replaced. It never adds or removes an entry
+// or touches its bookkeeping, and does nothing once another request has
+// replaced mine.
 func (s *challengeStore) restore(k challengeKey, mine, previous challenge, replaced bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if current, ok := s.pending[k]; ok && current.salt == mine.salt && replaced && s.now().Before(previous.expires) {
-		s.pending[k] = previous
+		current.challenge = previous
+		s.pending[k] = current
 	}
 }
 
@@ -137,13 +152,13 @@ func (s *challengeStore) check(k challengeKey, code string) (pending bool, err e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c, ok := s.pending[k]
-	if !ok || !s.now().Before(c.expires) {
+	if !ok || !s.now().Before(c.hold) {
 		delete(s.pending, k)
 		return false, ErrChallengeFailed
 	}
 	c.attempts++
 	submitted := challengeDigest(c.salt, code)
-	match := subtle.ConstantTimeCompare(c.digest[:], submitted[:]) == 1
+	match := subtle.ConstantTimeCompare(c.digest[:], submitted[:]) == 1 && s.now().Before(c.expires)
 	if match || c.attempts >= challengeMaxAttempts {
 		delete(s.pending, k)
 	} else {

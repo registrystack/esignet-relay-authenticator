@@ -189,9 +189,11 @@ func (c Config) validate() error {
 	if m := c.Messaging; m != nil {
 		check(!c.Demo.StaticOTPEnabled && !c.Demo.Mailpit.Enabled, "demo.challenge_mode")
 		m.validate(check, c.BREG.ProvisionedFields, c.HTTP.AllowInsecureHTTP)
-		// A send lasts at most twice the HTTP timeout (token, then message), and the
-		// cooldown must outlast it so two sends for one person never overlap.
-		check(m.ResendCooldownSeconds >= 2*c.HTTP.TimeoutSeconds, "messaging.resend_cooldown_seconds (at least twice http.timeout_seconds)")
+		// The cooldown starts when a request is admitted. The BREG lookup then takes
+		// up to one HTTP timeout and the send up to two (token, then message), so the
+		// cooldown must be at least three timeouts for two sends for one person and
+		// binding never to overlap.
+		check(m.ResendCooldownSeconds >= 3*c.HTTP.TimeoutSeconds, "messaging.resend_cooldown_seconds (at least three times http.timeout_seconds)")
 	}
 	check(len(c.BREG.ProvisionedFields) > 0, "breg.provisioned_fields")
 	for _, s := range c.BREG.ProvisionedFields {
@@ -227,7 +229,7 @@ func (m *MessagingConfig) validate(check func(bool, string), provisioned []strin
 	check(m.CodeTTLSeconds >= 60 && m.CodeTTLSeconds <= 900, "messaging.code_ttl_seconds")
 	check(m.ResendCooldownSeconds >= 1 && m.ResendCooldownSeconds <= 3600, "messaging.resend_cooldown_seconds")
 	check(m.MaxSendsPerHour >= 1 && m.MaxSendsPerHour <= 60, "messaging.max_sends_per_hour")
-	check(m.MaxTrackedPeople >= 1 && m.MaxTrackedPeople <= 10_000_000, "messaging.max_tracked_people")
+	check(m.MaxTrackedPeople >= 1 && m.MaxTrackedPeople <= 1_000_000, "messaging.max_tracked_people")
 	check(m.MaxPendingCodes >= 1 && m.MaxPendingCodes <= 1_000_000, "messaging.max_pending_codes")
 	channels := true
 	for name, ch := range m.Channels {

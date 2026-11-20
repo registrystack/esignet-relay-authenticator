@@ -518,7 +518,7 @@ func TestMessagingOutwardResultIsIdenticalForKnownAndUnknown(t *testing.T) {
 		{"challenge store full", func(m *messagingFixture) {
 			v := m.verifier()
 			for i := 0; i < v.maxPending; i++ {
-				v.pending[challengeKey{identifier: fmt.Sprintf("filler-%d", i)}] = challenge{expires: m.clock().Add(time.Minute)}
+				v.pending[challengeKey{identifier: fmt.Sprintf("filler-%d", i)}] = entry{hold: m.clock().Add(time.Minute)}
 			}
 		}, EventStoreFull},
 		{"send queue full", func(m *messagingFixture) { m.verifier().slots = make(chan struct{}) }, EventSendDropped},
@@ -741,7 +741,7 @@ func TestMessagingRefusedResendKeepsDeliveredCode(t *testing.T) {
 
 // A failure of an earlier send must not delete a challenge a later resend stored.
 func TestMessagingStaleFailureKeepsNewerChallenge(t *testing.T) {
-	m := newMessagingFixture(t, func(c *Config) { c.Messaging.ResendCooldownSeconds = 2 })
+	m := newMessagingFixture(t, func(c *Config) { c.Messaging.ResendCooldownSeconds = 3 })
 	v := m.verifier()
 	key := challengeKey{"subject-canary", "uin", binding()}
 	_, first, _ := v.generate()
@@ -834,7 +834,7 @@ func TestMessagingConfigurationValidation(t *testing.T) {
 		{"ttl too long", func(c *Config) { c.Messaging.CodeTTLSeconds = 3600 }, "messaging.code_ttl_seconds"},
 		{"cooldown too long", func(c *Config) { c.Messaging.ResendCooldownSeconds = 99999 }, "messaging.resend_cooldown_seconds"},
 		{"budget too large", func(c *Config) { c.Messaging.MaxSendsPerHour = 1000 }, "messaging.max_sends_per_hour"},
-		{"tracked people too many", func(c *Config) { c.Messaging.MaxTrackedPeople = 100_000_000 }, "messaging.max_tracked_people"},
+		{"tracked people too many", func(c *Config) { c.Messaging.MaxTrackedPeople = 1_000_001 }, "messaging.max_tracked_people"},
 		{"pending codes too many", func(c *Config) { c.Messaging.MaxPendingCodes = 100_000_000 }, "messaging.max_pending_codes"},
 		{"template version uppercase", func(c *Config) {
 			ch := c.Messaging.Channels["email"]

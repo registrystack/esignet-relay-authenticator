@@ -316,7 +316,7 @@ func (p *Provider) String() string { return "registry identity provider" }
 func (p *Provider) GoString() string { return p.String() }
 
 // emit passes an event to the operator signal. A panic in the callback is
-// contained and reported once on the standard logger, so it cannot end a
+// contained and logged on the standard logger each time it happens, so it cannot end a
 // send or the process.
 func (p *Provider) emit(e OperatorEvent) {
 	if p.signal == nil {
