@@ -83,6 +83,183 @@ use authenticated TLS for operated services. Redirects are not followed.
 
 ## Challenge verification
 
+A deployment chooses one of three ways to verify a challenge:
+
+1. Registry Messaging, configured by the `messaging` block. This is the
+   production path.
+2. A verifier of your own, supplied through
+   `provider.New(cfg, provider.WithChallengeVerifier(verifier))`.
+3. A synthetic demo verifier (static code or Mailpit), for local flows only.
+
+They are mutually exclusive. The provider refuses to start when `messaging` is
+combined with a `demo` verifier or with an injected verifier, and when the
+`messaging` block is incomplete.
+
+### Registry Messaging (production)
+
+The provider asks [Registry Messaging](https://registrystack.org) to send the
+code. Messaging renders one reviewed template and sends it through the email or
+SMS provider the operator configured. A request for a code works like this:
+
+1. The provider reserves room for one pending code, then looks the person up in
+   BREG through the configured access profile. One lookup reads the account-check
+   fields and the contact field of every channel that is both requested and
+   configured. eSignet requests every channel the provider advertises.
+2. If the person is unknown or ineligible, or has no valid contact for any of
+   those channels, it sends nothing and returns the same result as a successful
+   send. Otherwise it uses the first channel with a valid contact, in the fixed
+   order email, then phone.
+3. It generates a six-digit code, keeps a salted digest, starts the Messaging
+   call in the background and returns. The message carries an `expiresAt` equal to
+   the code's expiry, so Messaging does not start a delivery after the code has
+   expired. It cannot stop a delivery that is already under way and delayed.
+
+A contact is valid when Registry Messaging would accept it as a recipient. An
+email address is one `local@domain` of visible ASCII, with a dotted domain that
+neither starts nor ends with a dot, and none of `< > , ;`. A phone number is E.164.
+
+```yaml
+breg:
+  # ... as above, plus the contact fields the register exposes
+  provisioned_fields: [uin, status, givenName, familyName, email-address, phone-number]
+messaging:
+  base_url: https://messaging.example.org
+  token_resource: urn:messaging:production
+  token_scopes: [messaging:send]
+  code_ttl_seconds: 300
+  resend_cooldown_seconds: 60
+  max_sends_per_hour: 5
+  max_tracked_people: 100000
+  max_pending_codes: 100000
+  contact_fields:
+    email: email-address
+    phone: phone-number
+  channels:
+    email:
+      sender_profile: otp-email
+      template_id: sign-in-code-email
+      template_version: "1"
+      locale: en
+    phone:
+      sender_profile: otp-sms
+      template_id: sign-in-code-sms
+      template_version: "1"
+      locale: en
+```
+
+| Key | Meaning |
+| --- | --- |
+| `base_url` | Messaging's URL. HTTPS unless `http.allow_insecure_http` is set. |
+| `token_resource`, `token_scopes` | The resource and scopes requested for the Messaging access token. The issuer must set Messaging's audience for them. |
+| `code_ttl_seconds` | Code lifetime. Default 300, from 60 to 900. |
+| `resend_cooldown_seconds` | Minimum gap between sends to one person on one transaction. Default 60, up to 3600, and at least three times `http.timeout_seconds` (30 with the default timeout), because the BREG lookup and the send can each take that long and two sends for one person must never overlap. A smaller value is refused at startup. |
+| `max_sends_per_hour` | Sends to one person in any hour, across transactions. Default 5, from 1 to 60. |
+| `max_tracked_people` | People the limiter tracks at once. Default 100000, from 1 to 1000000. |
+| `max_pending_codes` | Pending entries at once, one per admitted request. Default 100000, from 1 to 1000000. |
+| `contact_fields` | The BREG field holding the contact for each channel. Each must appear in `breg.provisioned_fields`. |
+| `channels` | One entry per offered channel, `email` or `phone`. Only configured channels are advertised to eSignet. |
+
+Each channel names the Messaging sender profile, the template id and version,
+and one locale. The template receives two values, `code` (a string of six digits)
+and `minutes` (the whole minutes until expiry). A phone number must be in E.164
+form. [examples/messaging-otp](../examples/messaging-otp) holds an email
+template, an SMS template, their sender profiles and an access profile that lets
+only this client send only those templates. Check it with `messagingctl check`.
+
+The token request reuses `token_client`: the same client identity, the same
+private key file and the same issuer endpoint, with Messaging's own resource and
+scopes. Messaging must list the client in its `allowedClients`, and its access
+profile must list the client, the scopes, the sender profiles and the templates.
+The `http` settings (timeout, CA file, response limit and the insecure HTTP
+rule) apply to Messaging calls too.
+
+Each send carries a random `Idempotency-Key`. The provider does not retry it,
+but Go's HTTP transport may replay it once on a stale keep-alive connection.
+That is harmless, because Messaging answers a repeated key and body with the
+stored receipt.
+
+The call runs on its own context with a timeout of twice `http.timeout_seconds`,
+and at most 64 calls run at once. The 64 is fixed, not configurable, and a call
+past that limit is dropped and reported as `send-dropped`. The caller sees a
+successful send in every case, so the operator needs a signal.
+
+The shipped image logs one warning line per event through the host logger, with
+the event kind in an `event` field and fixed text otherwise. Library users pass
+`provider.WithOperatorSignal(func(provider.OperatorEvent) {})` to `provider.New`.
+It must be safe for concurrent use and must not block, and the provider contains
+a panic in it. Both receive one of these fixed kinds and never a code, contact,
+identifier or Messaging response:
+
+| Event | Meaning | What happened to the code |
+| --- | --- | --- |
+| `send-refused` | Messaging answered with a 4xx, for example a rate limit or an unknown template. | The earlier code, if any, is restored. The cooldown and budget stay spent. |
+| `send-failed` | The call could not be made or its outcome is unknown, for example a timeout. | Kept, in case the message arrives. The cooldown and budget stay spent. |
+| `send-dropped` | 64 calls were already running. | Not sent. The cooldown and budget stay spent. |
+| `limiter-full` | The limiter is at `max_tracked_people`. The request was refused. | None issued. |
+| `store-full` | The pending store is at `max_pending_codes`. The request was refused. | None issued. |
+
+Every sign-in code shares Messaging's access profile limits, so a rate limit
+there refuses sends for everyone until it passes. Watch `send-refused`.
+
+### Limits and bounds
+
+All limits are held in process memory, keyed per person by an HMAC of the
+identifier type and identifier under a random key that lives as long as the
+process. A restart clears them.
+
+| Limit | Default | At the limit |
+| --- | --- | --- |
+| Resend cooldown, per person and transaction | 60 s | The request returns as for a successful send and nothing is sent. The earlier code stays valid until it expires. |
+| Sends per person per hour | 5 | The same silent result until the hour passes. |
+| Failed verifications per person | 10 per hour | Counted only for a code that was requested. Codes stop being issued and accepted for that person until the hour ends. A send is silent and a verification answers as for a wrong code. A success resets the count. |
+| Attempts per code | 5 | The code is consumed. |
+| People tracked (`max_tracked_people`) | 100000 | Every request fails as unavailable and raises `limiter-full`, including one from a person already tracked. Entries with nothing live are dropped first. |
+| Pending entries (`max_pending_codes`) | 100000 | Every request fails as unavailable and raises `store-full`, whoever it names. Expired entries are dropped first. |
+
+Every admitted request stores one pending entry and counts against its person,
+whether or not a message is sent, so neither bound reveals who exists. The
+limiter and the store are pruned at most once a second, not on every request.
+The prune is linear in the tracked entries and runs under the limiter lock. It
+takes about 27 ms at 100000 people and 600 ms at 1000000 on a development
+machine, which is why `max_tracked_people` stops at 1000000. Scale out rather
+than up.
+
+Practical ceilings. At the default of 100000 people, a deployment signs in about
+28 distinct people a second sustained over an hour (100000 divided by 3600). A
+pending entry lives five minutes by default, so the store allows about 333
+requests a second, and the limiter is the tighter bound. Measured on a
+development machine, a limiter entry takes about 840 bytes and a pending entry
+about 240 bytes (more for long identifiers), so the defaults hold roughly 84 MB
+and 24 MB, and one once-a-second prune of 100000 entries takes about 20 ms. Past
+a bound, new requests are refused as unavailable until entries expire. Raise the
+bound for a larger deployment and budget memory from these figures.
+
+Because every request names a person, each bound can be used up by guessing
+identifiers. Run a per-client rate limit in front of eSignet. The provider does
+not rate limit by caller.
+
+The per-person limits can be used against a named person. Anyone who knows an
+identifier can use up its hourly budget with a few requests, so that person is
+told a code was sent while nothing arrives, for up to an hour. Nothing is
+refunded, so a person who retries during a Messaging outage can use up their own
+hourly budget and be held silently after the outage ends. A wrong code locks a
+person only after they requested a code, and ten failures an hour is the
+ceiling, so sustained, loud guessing against one person reaches about 240 guesses
+a day. Any per-person limit has this weakness. Edge rate limiting is the
+mitigation.
+
+What this does not hide:
+
+- Messaging's API never returns the recipient, the rendered message or the
+  template data. It keeps them for its payload retention period (1 to 30 days,
+  default 7). The exposure is a live code during its validity for whoever can
+  read Messaging's database or backups, and for the email or SMS provider.
+- Pending codes and limits live in one process. Run one replica or route each
+  eSignet session to the same replica. Per-person limits multiply by the number
+  of replicas. A restart drops pending codes.
+
+### Bring your own verifier
+
 A production adapter supplies the Go interface through
 `provider.New(cfg, provider.WithChallengeVerifier(verifier))`. Its `Verify`
 method must authenticate the exact identifier and binding in the request.
@@ -90,8 +267,10 @@ method must authenticate the exact identifier and binding in the request.
 system. Implementations must honor context cancellation and never log challenge
 or subject values. Verification failure stops before token acquisition and BREG.
 
-The shipped factory has no implicit production verifier. It fails startup
-unless a real verifier is injected or synthetic mode is explicitly enabled:
+### Synthetic demo verifiers
+
+The shipped factory has no implicit verifier. It fails startup unless Messaging is
+configured, a real verifier is injected or synthetic mode is explicitly enabled:
 
 ```yaml
 demo:
@@ -122,11 +301,11 @@ one fixed synthetic inbox, never derived from the person's identifier or BREG
 attributes. Only email is advertised. Codes expire in five minutes, allow at
 most five wrong attempts, and are consumed on success. They bind the exact
 identifier/type, relying party, client and transaction. The process retains at
-most 1024 pending or sending challenges and loses them on restart. SMTP delivery
+most 100000 pending challenges and loses them on restart. SMTP delivery
 failure creates no new challenge. This mode uses unencrypted local SMTP and cannot
 establish ownership of a real email address or a person's identity. Keep it
-restricted to synthetic local demonstrations; a production integration supplies
-its own `ChallengeVerifier`.
+restricted to synthetic local demonstrations. A production integration uses
+Registry Messaging or supplies its own `ChallengeVerifier`.
 
 ## eSignet configuration
 

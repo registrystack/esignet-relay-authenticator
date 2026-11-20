@@ -117,7 +117,7 @@ func TestMailpitChallengeDeliveryBindingExpiryAndConsumption(t *testing.T) {
 		t.Fatal(err)
 	}
 	expiredCode := mailpitCode(t, messages)
-	now = now.Add(mailpitChallengeTTL)
+	now = now.Add(defaultChallengeTTL)
 	challenge.Challenge = expiredCode
 	if err := v.Verify(context.Background(), challenge); err != ErrChallengeFailed || len(v.pending) != 0 {
 		t.Fatal("expired challenge accepted or retained")
@@ -132,7 +132,7 @@ func TestMailpitAttemptsAndCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	code := mailpitCode(t, messages)
-	for i := 0; i < mailpitMaxAttempts; i++ {
+	for i := 0; i < challengeMaxAttempts; i++ {
 		if err := v.Verify(context.Background(), ChallengeRequest{Identifier: r.Identifier, IdentifierType: r.IdentifierType, Binding: r.Binding, Challenge: "invalid"}); err != ErrChallengeFailed {
 			t.Fatal("wrong code accepted")
 		}
@@ -140,8 +140,8 @@ func TestMailpitAttemptsAndCapacity(t *testing.T) {
 	if err := v.Verify(context.Background(), ChallengeRequest{Identifier: r.Identifier, IdentifierType: r.IdentifierType, Binding: r.Binding, Challenge: code}); err != ErrChallengeFailed {
 		t.Fatal("code accepted after attempt limit")
 	}
-	for i := 0; i < mailpitMaxPending; i++ {
-		v.pending[mailpitKey{identifier: fmt.Sprintf("%d", i)}] = mailpitChallenge{expires: time.Now().Add(time.Minute)}
+	for i := 0; i < defaultMaxPendingCodes; i++ {
+		v.pending[challengeKey{identifier: fmt.Sprintf("%d", i)}] = entry{hold: time.Now().Add(time.Minute)}
 	}
 	if err := v.SendOTP(context.Background(), r); err != ErrUnavailable {
 		t.Fatal("pending challenge bound ignored")

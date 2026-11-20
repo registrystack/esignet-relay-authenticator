@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/messaging/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1
+kind: MessagingProject
+project:
+  id: esignet-sign-in-codes
+  version: "1"
+# One email relay and one SMS gateway. The endpoints and credentials of each
+# are runtime configuration, not part of this package.
+providers:
+  - id: mail-relay
+    type: smtp
+  - id: sms-gateway
+    type: http
+    idempotentSubmit: true
+senderProfiles:
+  - id: otp-email
+    channel: email
+    provider: mail-relay
+    sender: sign-in@example.org
+  - id: otp-sms
+    channel: sms
+    provider: sms-gateway
+    sender: Registry
+    maximumSegments: 1
+templates:
+  - id: sign-in-code-email
+    version: "1"
+  - id: sign-in-code-sms
+    version: "1"
+# Only the relay's client may send, and only these two templates through these
+# two sender profiles. It may not send direct content or read other messages.
+accessProfiles:
+  - id: esignet-relay
+    principalClaim: sub
+    requiredScopes: [messaging:send]
+    requesterClients: [esignet-source]
+    actorKind: service
+    actsAs: sender
+    senderProfiles: [otp-email, otp-sms]
+    templates: [sign-in-code-email, sign-in-code-sms]
+    # PLACEHOLDER limits. Size them for your peak sign-in rate: every sign-in code
+    # for the whole deployment shares them, because the relay is one caller.
+    requestsPerMinute: 60
+    burst: 10
+    maximumMessagesPerDay: 5000

@@ -20,6 +20,7 @@ type Config struct {
 	ClaimMap       map[string]string `yaml:"claim_map"`
 	HTTP           HTTPConfig        `yaml:"http"`
 	Demo           DemoConfig        `yaml:"demo"`
+	Messaging      *MessagingConfig  `yaml:"messaging"`
 }
 type BREGConfig struct {
 	BaseURL            string   `yaml:"base_url"`
@@ -57,6 +58,30 @@ type MailpitConfig struct {
 	SMTPAddress string `yaml:"smtp_address"`
 	Sender      string `yaml:"sender"`
 	Recipient   string `yaml:"recipient"`
+}
+
+// MessagingConfig selects Registry Messaging as the production OTP path. The
+// presence of the block enables it. The token client identity and private key
+// are the ones configured under token_client.
+type MessagingConfig struct {
+	BaseURL               string                            `yaml:"base_url"`
+	TokenResource         string                            `yaml:"token_resource"`
+	TokenScopes           []string                          `yaml:"token_scopes"`
+	CodeTTLSeconds        int                               `yaml:"code_ttl_seconds"`
+	ResendCooldownSeconds int                               `yaml:"resend_cooldown_seconds"`
+	MaxSendsPerHour       int                               `yaml:"max_sends_per_hour"`
+	MaxTrackedPeople      int                               `yaml:"max_tracked_people"`
+	MaxPendingCodes       int                               `yaml:"max_pending_codes"`
+	ContactFields         map[string]string                 `yaml:"contact_fields"`
+	Channels              map[string]MessagingChannelConfig `yaml:"channels"`
+}
+
+// MessagingChannelConfig names the reviewed Messaging template for one channel.
+type MessagingChannelConfig struct {
+	SenderProfile   string `yaml:"sender_profile"`
+	TemplateID      string `yaml:"template_id"`
+	TemplateVersion string `yaml:"template_version"`
+	Locale          string `yaml:"locale"`
 }
 
 func LoadConfigFromEnv() (Config, error) {
@@ -112,6 +137,23 @@ func (c *Config) defaults() {
 	if c.HTTP.MaxResponseBytes == 0 {
 		c.HTTP.MaxResponseBytes = 1 << 20
 	}
+	if m := c.Messaging; m != nil {
+		if m.CodeTTLSeconds == 0 {
+			m.CodeTTLSeconds = 300
+		}
+		if m.ResendCooldownSeconds == 0 {
+			m.ResendCooldownSeconds = 60
+		}
+		if m.MaxSendsPerHour == 0 {
+			m.MaxSendsPerHour = 5
+		}
+		if m.MaxTrackedPeople == 0 {
+			m.MaxTrackedPeople = defaultMaxTrackedPeople
+		}
+		if m.MaxPendingCodes == 0 {
+			m.MaxPendingCodes = defaultMaxPendingCodes
+		}
+	}
 }
 func (c Config) validate() error {
 	invalid := []string{}
@@ -144,6 +186,15 @@ func (c Config) validate() error {
 		check(validMailAddress(c.Demo.Mailpit.Sender), "demo.mailpit.sender")
 		check(validMailAddress(c.Demo.Mailpit.Recipient), "demo.mailpit.recipient")
 	}
+	if m := c.Messaging; m != nil {
+		check(!c.Demo.StaticOTPEnabled && !c.Demo.Mailpit.Enabled, "demo.challenge_mode")
+		m.validate(check, c.BREG.ProvisionedFields, c.HTTP.AllowInsecureHTTP)
+		// The cooldown starts when a request is admitted. The BREG lookup then takes
+		// up to one HTTP timeout and the send up to two (token, then message), so the
+		// cooldown must be at least three timeouts for two sends for one person and
+		// binding never to overlap.
+		check(m.ResendCooldownSeconds >= 3*c.HTTP.TimeoutSeconds, "messaging.resend_cooldown_seconds (at least three times http.timeout_seconds)")
+	}
 	check(len(c.BREG.ProvisionedFields) > 0, "breg.provisioned_fields")
 	for _, s := range c.BREG.ProvisionedFields {
 		if !validField(s) {
@@ -169,6 +220,62 @@ func (c Config) validate() error {
 		return errors.New("configuration invalid: " + strings.Join(invalid, ", "))
 	}
 	return nil
+}
+
+func (m *MessagingConfig) validate(check func(bool, string), provisioned []string, insecure bool) {
+	check(validEndpoint(m.BaseURL, insecure), "messaging.base_url")
+	check(validResource(m.TokenResource), "messaging.token_resource")
+	check(validScopes(m.TokenScopes), "messaging.token_scopes")
+	check(m.CodeTTLSeconds >= 60 && m.CodeTTLSeconds <= 900, "messaging.code_ttl_seconds")
+	check(m.ResendCooldownSeconds >= 1 && m.ResendCooldownSeconds <= 3600, "messaging.resend_cooldown_seconds")
+	check(m.MaxSendsPerHour >= 1 && m.MaxSendsPerHour <= 60, "messaging.max_sends_per_hour")
+	check(m.MaxTrackedPeople >= 1 && m.MaxTrackedPeople <= 1_000_000, "messaging.max_tracked_people")
+	check(m.MaxPendingCodes >= 1 && m.MaxPendingCodes <= 1_000_000, "messaging.max_pending_codes")
+	channels := true
+	for name, ch := range m.Channels {
+		if name != "email" && name != "phone" {
+			channels = false
+			continue
+		}
+		check(validMessagingToken(ch.SenderProfile) && validMessagingToken(ch.TemplateID) && validTemplateVersion(ch.TemplateVersion) && validMessagingToken(ch.Locale), "messaging.channels."+name)
+	}
+	check(channels && len(m.Channels) > 0, "messaging.channels")
+	contacts := len(m.ContactFields) == len(m.Channels)
+	for name, field := range m.ContactFields {
+		_, configured := m.Channels[name]
+		if !configured || !validField(field) || !contains(provisioned, field) {
+			contacts = false
+		}
+	}
+	check(contacts, "messaging.contact_fields")
+}
+
+// validTemplateVersion applies Registry Messaging's rule for a template
+// version: 1 to 32 lowercase letters, digits, dots or hyphens, starting with a
+// letter or digit, with no empty dot-separated run.
+func validTemplateVersion(s string) bool {
+	if s == "" || len(s) > 32 || !(s[0] >= 'a' && s[0] <= 'z' || s[0] >= '0' && s[0] <= '9') {
+		return false
+	}
+	for _, b := range []byte(s) {
+		if !(b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '.' || b == '-') {
+			return false
+		}
+	}
+	return !strings.Contains(s, "..") && !strings.HasSuffix(s, ".")
+}
+
+// validMessagingToken accepts the visible ASCII identifiers Registry Messaging uses.
+func validMessagingToken(s string) bool {
+	if s == "" || len(s) > 128 {
+		return false
+	}
+	for _, b := range []byte(s) {
+		if b < 0x21 || b > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func hasTopLevelKey(document *yaml.Node, name string) bool {

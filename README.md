@@ -83,13 +83,56 @@ See [configuration](docs/esignet-configuration.md), the
 - Errors are fixed and value-free. HTTP calls have bounded duration and response
   size and do not follow redirects.
 
-The Go `provider.ChallengeVerifier` interface is the production extension seam.
+## One-time codes
+
+The production path sends each sign-in code through
+[Registry Messaging](docs/esignet-configuration.md#registry-messaging-production),
+the Registry Stack product that sends one email or SMS to one recipient from a
+reviewed template. The provider looks the person up in BREG, reads their email
+address or phone number from the register, generates the code and asks Messaging
+to deliver it. The code is single use and expires in minutes. The provider holds
+only a salted digest in memory.
+
+A request for a code gives the same result for a known person, an unknown or
+ineligible person, one with no contact for the channel, and a person held by a
+resend limit. The Messaging call runs after that result is returned, so neither
+its outcome nor its duration depends on who exists. What the relay stores is a
+function of the requests it received, never of what BREG or Messaging answered.
+Every admitted request spends its cooldown and hourly budget and stores one
+pending entry, and nothing is refunded. The relay does no different work for
+known and unknown people. BREG's own lookup may still take longer for a found
+record, so keep BREG's response time in mind when you rely on this.
+
+A failed send is visible only to the operator. The shipped image logs one fixed
+line per event kind. Library users receive the same kinds through
+`provider.WithOperatorSignal`. Neither carries a code, contact, identifier or
+Messaging response. A full challenge store or limiter refuses every request
+alike, including people already tracked. Resends, hourly sends and failed
+verifications are limited per person, and every limit is bounded. See
+[configuration](docs/esignet-configuration.md#registry-messaging-production) for
+the bounds and what a bound costs.
+
+Messaging's API never returns the recipient, the rendered message or the template
+data. It keeps them for its payload retention period (1 to 30 days, default 7),
+so the exposure is a live code during its validity for whoever can read
+Messaging's database or backups, and for the email or SMS provider. Choose a
+short payload retention period if that matters to your deployment.
+
+Pending codes and limits live in the memory of one provider process. Run one
+replica, or route each eSignet session to the same replica. Per-person limits
+multiply by the number of replicas, and a restart drops pending codes. A person
+then asks for a new one.
+
+The Go `provider.ChallengeVerifier` interface remains the extension seam for an
+institution that brings its own sender, through `provider.WithChallengeVerifier`.
 The bundled static OTP and local Mailpit verifiers are **synthetic-demo only**,
-mutually exclusive and disabled by default. Mailpit delivers a generated,
-transaction-bound one-time code to a fixed synthetic inbox. A deployment without
-a configured verifier fails startup. See [configuration](docs/esignet-configuration.md)
-for the bounded local flow. This repository does not implement production OTP
-delivery, enrollment, signup, wallet login or identity assurance.
+mutually exclusive with each other and with Messaging, and disabled by default.
+Mailpit delivers a generated, transaction-bound one-time code to a fixed
+synthetic inbox. A deployment with no verifier configured fails startup.
+See [configuration](docs/esignet-configuration.md) for the bounded local flow and
+[examples/messaging-otp](examples/messaging-otp) for a Messaging package. This
+repository does not implement enrollment, signup, wallet login or identity
+assurance.
 
 The adapter supplies structured attributes to eSignet, which applies the
 client's UserInfo response mode. There is no provider signing key, certificate

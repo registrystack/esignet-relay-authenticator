@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+- Add a production one-time-code path through Registry Messaging, configured by a
+  top-level `messaging` block. The provider reads the person's contact from BREG,
+  generates a single-use code and asks Messaging to send it from a reviewed email
+  or SMS template. The send runs after the request returns, so known, unknown,
+  ineligible, contactless and limited people get the same result and a failed
+  send is reported only through the new `provider.WithOperatorSignal` option. One
+  BREG lookup reads every requested channel and the first with a valid contact
+  is used, email before phone. The relay's stored state depends only on the
+  requests received: an admitted request spends its cooldown and hourly budget
+  and stores one pending entry, and nothing is refunded. Ten failed verifications
+  in an hour, counted only for a requested code, lock a person out until the hour
+  ends. Limiter entries are keyed by an HMAC of the identifier. The limiter and
+  the pending store are bounded, by `max_tracked_people` and `max_pending_codes`
+  (both default 100000), refuse every request when full, and are pruned at most
+  once a second. `resend_cooldown_seconds` must be at least three times
+  `http.timeout_seconds`. The shipped image logs one fixed line per operator
+  event kind. Messaging keeps the
+  rendered message for its payload retention period, so database readers,
+  backups and the email or SMS provider can see a live code during its validity.
+- Add `examples/messaging-otp`, a Messaging package with an email template, an SMS
+  template, their sender profiles and an access profile for this client.
+- Share the challenge handling between the Mailpit and Messaging verifiers, and
+  let the token client serve more than one resource. The Mailpit demo behaves as
+  before.
+- Reject a send request for a channel the deployment does not offer as an invalid
+  request instead of an unavailable error.
+
 ## 0.6.1 (2026-10-01)
 
 - Restore BREG OTP sign-in on the eSignet 2.0.0 GA host. The bundled
