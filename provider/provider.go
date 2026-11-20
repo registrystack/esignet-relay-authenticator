@@ -42,6 +42,19 @@ func New(c Config, options ...Option) (*Provider, error) {
 	c.ClaimMap = m
 	c.BREG.ProvisionedFields = append([]string(nil), c.BREG.ProvisionedFields...)
 	c.BREG.AccountCheckFields = append([]string(nil), c.BREG.AccountCheckFields...)
+	if c.Messaging != nil {
+		m := *c.Messaging
+		m.TokenScopes = append([]string(nil), m.TokenScopes...)
+		m.ContactFields = make(map[string]string, len(c.Messaging.ContactFields))
+		for k, v := range c.Messaging.ContactFields {
+			m.ContactFields[k] = v
+		}
+		m.Channels = make(map[string]MessagingChannelConfig, len(c.Messaging.Channels))
+		for k, v := range c.Messaging.Channels {
+			m.Channels[k] = v
+		}
+		c.Messaging = &m
+	}
 	c.TokenClient.Scopes = append([]string(nil), c.TokenClient.Scopes...)
 	p := &Provider{config: c, now: time.Now}
 	p.tokens = newTokenSource(p, c.TokenClient.Resource, c.TokenClient.Scopes)
@@ -50,7 +63,10 @@ func New(c Config, options ...Option) (*Provider, error) {
 			o(p)
 		}
 	}
-	if p.verifier == nil {
+	if p.verifier != nil && c.Messaging != nil {
+		return nil, errors.New("messaging configuration conflicts with an injected challenge verifier")
+	}
+	if p.verifier == nil && c.Messaging == nil {
 		if c.Demo.Mailpit.Enabled {
 			p.verifier = newMailpitVerifier(c.Demo.Mailpit, time.Duration(c.HTTP.TimeoutSeconds)*time.Second)
 		} else if !c.Demo.StaticOTPEnabled {
@@ -90,6 +106,9 @@ func New(c Config, options ...Option) (*Provider, error) {
 	}
 	timeout := time.Duration(c.HTTP.TimeoutSeconds) * time.Second
 	p.http = &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: (&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}).DialContext, TLSClientConfig: tlsConfig, TLSHandshakeTimeout: timeout, ResponseHeaderTimeout: timeout, MaxIdleConns: 10, MaxIdleConnsPerHost: 5, IdleConnTimeout: 90 * time.Second}}
+	if c.Messaging != nil {
+		p.verifier = newMessagingVerifier(p, *c.Messaging)
+	}
 	return p, nil
 }
 func validBinding(b Binding) bool {
@@ -119,12 +138,7 @@ func (p *Provider) Authenticate(ctx context.Context, r AuthenticationRequest) (A
 	if err != nil {
 		return AuthenticationResult{}, err
 	}
-	for _, field := range p.config.BREG.AccountCheckFields {
-		if v, ok := fields[field]; !ok || v == nil {
-			return AuthenticationResult{}, ErrUnavailable
-		}
-	}
-	if v, ok := fields[p.config.BREG.SelectorField]; ok && v != r.Identifier {
+	if !p.accountOK(fields, r.Identifier) {
 		return AuthenticationResult{}, ErrUnavailable
 	}
 	now := p.now()
@@ -134,12 +148,26 @@ func (p *Provider) Authenticate(ctx context.Context, r AuthenticationRequest) (A
 	_ = json.Unmarshal(b, &out)
 	return AuthenticationResult{Subject: p.psut(state), Context: out}, nil
 }
+
+// accountOK reports whether a lookup result carries every account-check field
+// and names the identifier that was asked for.
+func (p *Provider) accountOK(fields map[string]any, identifier string) bool {
+	for _, field := range p.config.BREG.AccountCheckFields {
+		if v, ok := fields[field]; !ok || v == nil {
+			return false
+		}
+	}
+	if v, ok := fields[p.config.BREG.SelectorField]; ok && v != identifier {
+		return false
+	}
+	return true
+}
 func (p *Provider) SendOTP(ctx context.Context, r OTPRequest) error {
 	if !p.validSubject(r.Identifier, r.IdentifierType) || !validBinding(r.Binding) || len(r.Channels) == 0 {
 		return ErrInvalidRequest
 	}
 	for _, ch := range r.Channels {
-		if ch != "email" && ch != "phone" {
+		if !contains(p.SupportedOTPChannels(), ch) {
 			return ErrInvalidRequest
 		}
 	}
@@ -151,6 +179,9 @@ func (p *Provider) SendOTP(ctx context.Context, r OTPRequest) error {
 	return nil
 }
 func (p *Provider) SupportedOTPChannels() []string {
+	if v, ok := p.verifier.(*messagingVerifier); ok {
+		return v.channels()
+	}
 	if p.config.Demo.Mailpit.Enabled {
 		return []string{"email"}
 	}
