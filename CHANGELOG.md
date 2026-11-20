@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Add a production one-time-code path through Registry Messaging, configured by a
+  top-level `messaging` block. The provider reads the person's contact from BREG,
+  generates a single-use code and asks Messaging to send it from a reviewed email
+  or SMS template. Unknown, ineligible and contactless people get the same
+  result as a successful send. Resends are limited by a per-person cooldown and
+  an hourly budget. Messaging keeps the rendered code for its payload retention
+  period, so its operators can read a live code during its validity.
+- Add `examples/messaging-otp`, a Messaging package with an email template, an SMS
+  template, their sender profiles and an access profile for this client.
+- Share the challenge handling between the Mailpit and Messaging verifiers, and
+  let the token client serve more than one resource. The Mailpit demo behaves as
+  before.
+- Reject a send request for a channel the deployment does not offer as an invalid
+  request instead of an unavailable error.
+
 ## 0.6.1 (2026-10-01)
 
 - Restore BREG OTP sign-in on the eSignet 2.0.0 GA host. The bundled

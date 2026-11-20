@@ -83,13 +83,41 @@ See [configuration](docs/esignet-configuration.md), the
 - Errors are fixed and value-free. HTTP calls have bounded duration and response
   size and do not follow redirects.
 
-The Go `provider.ChallengeVerifier` interface is the production extension seam.
+## One-time codes
+
+The production path sends each sign-in code through
+[Registry Messaging](docs/esignet-configuration.md#registry-messaging-production),
+the Registry Stack product that sends one email or SMS to one recipient from a
+reviewed template. The provider looks the person up in BREG, reads their email
+address or phone number from the register, generates the code and asks Messaging
+to deliver it. The code is single use and expires in minutes. The provider holds
+only a salted digest in memory.
+
+Requesting a code never reveals whether a person exists. An unknown or ineligible
+person, or one with no contact for the channel, gets the same result as a
+successful send, and no message is sent. Resends are limited per person.
+
+Messaging keeps the rendered message and the recipient for its payload retention
+period (1 to 30 days, default 7), and its operators can read them. A code that
+Messaging holds is single use and expires within minutes, so the exposure is a
+live code during its validity. That is the same class of exposure as the email or
+SMS provider itself. Choose a short payload retention period if that matters to
+your deployment.
+
+Pending codes live in the memory of one provider process. Run one replica, or
+use sticky routing, and expect a restart to drop pending codes. A person then
+asks for a new one.
+
+The Go `provider.ChallengeVerifier` interface remains the extension seam for an
+institution that brings its own sender, through `provider.WithChallengeVerifier`.
 The bundled static OTP and local Mailpit verifiers are **synthetic-demo only**,
-mutually exclusive and disabled by default. Mailpit delivers a generated,
-transaction-bound one-time code to a fixed synthetic inbox. A deployment without
-a configured verifier fails startup. See [configuration](docs/esignet-configuration.md)
-for the bounded local flow. This repository does not implement production OTP
-delivery, enrollment, signup, wallet login or identity assurance.
+mutually exclusive with each other and with Messaging, and disabled by default.
+Mailpit delivers a generated, transaction-bound one-time code to a fixed
+synthetic inbox. A deployment with no verifier configured fails startup.
+See [configuration](docs/esignet-configuration.md) for the bounded local flow and
+[examples/messaging-otp](examples/messaging-otp) for a Messaging package. This
+repository does not implement enrollment, signup, wallet login or identity
+assurance.
 
 The adapter supplies structured attributes to eSignet, which applies the
 client's UserInfo response mode. There is no provider signing key, certificate

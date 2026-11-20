@@ -83,6 +83,108 @@ use authenticated TLS for operated services. Redirects are not followed.
 
 ## Challenge verification
 
+A deployment chooses one of three ways to verify a challenge:
+
+1. Registry Messaging, configured by the `messaging` block. This is the
+   production path.
+2. A verifier of your own, supplied through
+   `provider.New(cfg, provider.WithChallengeVerifier(verifier))`.
+3. A synthetic demo verifier (static code or Mailpit), for local flows only.
+
+They are mutually exclusive. The provider refuses to start when `messaging` is
+combined with a `demo` verifier or with an injected verifier, and when the
+`messaging` block is incomplete.
+
+### Registry Messaging (production)
+
+The provider asks [Registry Messaging](https://registrystack.org) to send the
+code. Messaging renders one reviewed template and sends it through the email or
+SMS provider the operator configured. A request for a code works like this:
+
+1. The provider looks the person up in BREG through the configured access
+   profile, reading the account-check fields and the contact field for the
+   requested channel.
+2. If the person is unknown or ineligible, or has no valid contact for the
+   channel, it sends nothing and returns the same result as a successful send.
+3. Otherwise it generates a six-digit code, keeps a salted digest, and posts the
+   message to Messaging with an `expiresAt` equal to the code's expiry, so
+   Messaging never delivers a stale code.
+
+```yaml
+breg:
+  # ... as above, plus the contact fields the register exposes
+  provisioned_fields: [uin, status, givenName, familyName, email-address, phone-number]
+messaging:
+  base_url: https://messaging.example.org
+  token_resource: urn:messaging:production
+  token_scopes: [messaging:send]
+  code_ttl_seconds: 300
+  resend_cooldown_seconds: 60
+  max_sends_per_hour: 5
+  contact_fields:
+    email: email-address
+    phone: phone-number
+  channels:
+    email:
+      sender_profile: otp-email
+      template_id: sign-in-code-email
+      template_version: "1"
+      locale: en
+    phone:
+      sender_profile: otp-sms
+      template_id: sign-in-code-sms
+      template_version: "1"
+      locale: en
+```
+
+| Key | Meaning |
+| --- | --- |
+| `base_url` | Messaging's URL. HTTPS unless `http.allow_insecure_http` is set. |
+| `token_resource`, `token_scopes` | The resource and scopes requested for the Messaging access token. The issuer must set Messaging's audience for them. |
+| `code_ttl_seconds` | Code lifetime. Default 300, from 60 to 900. |
+| `resend_cooldown_seconds` | Minimum gap between sends to one person on one transaction. Default 60, from 1 to 3600. |
+| `max_sends_per_hour` | Sends to one person in any hour, across transactions. Default 5, from 1 to 60. |
+| `contact_fields` | The BREG field holding the contact for each channel. Each must appear in `breg.provisioned_fields`. |
+| `channels` | One entry per offered channel, `email` or `phone`. Only configured channels are advertised to eSignet. |
+
+Each channel names the Messaging sender profile, the template id and version,
+and one locale. The template receives two values, `code` (a string of six digits)
+and `minutes` (the whole minutes until expiry). A phone number must be in E.164
+form. [examples/messaging-otp](../examples/messaging-otp) holds an email
+template, an SMS template, their sender profiles and an access profile that lets
+only this client send only those templates. Check it with `messagingctl check`.
+
+The token request reuses `token_client`: the same client identity, the same
+private key file and the same issuer endpoint, with Messaging's own resource and
+scopes. Messaging must list the client in its `allowedClients`, and its access
+profile must list the client, the scopes, the sender profiles and the templates.
+The `http` settings (timeout, CA file, response limit and the insecure HTTP
+rule) apply to Messaging calls too.
+
+Each send carries a random `Idempotency-Key` and is not retried. If Messaging
+cannot be reached or refuses the message, the request fails as unavailable and
+the resend cooldown is released. If the outcome is unknown, such as a timeout,
+the code stays valid in case the message arrives.
+
+Resend limits answer silently. A request inside the cooldown or over the hourly
+budget gets the same result as a successful send and sends nothing, so a caller
+cannot tell a known person from an unknown one by the limits. The earlier code
+stays valid until it expires. Limits are held in process memory and bounded.
+
+What this does not hide:
+
+- Messaging keeps the rendered message and the recipient for its payload
+  retention period (1 to 30 days, default 7), and its submitter and operator
+  profiles can read it. A code is single use and expires in minutes, so the
+  exposure is a live code during its validity. This is the same class of
+  exposure as the email or SMS provider itself.
+- A request for an unknown person returns faster than one that sends a message.
+  The result is identical, but the timing is not.
+- Pending codes and limits live in one process. Run one replica or use sticky
+  routing. A restart drops pending codes.
+
+### Bring your own verifier
+
 A production adapter supplies the Go interface through
 `provider.New(cfg, provider.WithChallengeVerifier(verifier))`. Its `Verify`
 method must authenticate the exact identifier and binding in the request.
@@ -90,8 +192,10 @@ method must authenticate the exact identifier and binding in the request.
 system. Implementations must honor context cancellation and never log challenge
 or subject values. Verification failure stops before token acquisition and BREG.
 
-The shipped factory has no implicit production verifier. It fails startup
-unless a real verifier is injected or synthetic mode is explicitly enabled:
+### Synthetic demo verifiers
+
+The shipped factory has no implicit verifier. It fails startup unless Messaging is
+configured, a real verifier is injected or synthetic mode is explicitly enabled:
 
 ```yaml
 demo:
@@ -125,8 +229,8 @@ identifier/type, relying party, client and transaction. The process retains at
 most 1024 pending or sending challenges and loses them on restart. SMTP delivery
 failure creates no new challenge. This mode uses unencrypted local SMTP and cannot
 establish ownership of a real email address or a person's identity. Keep it
-restricted to synthetic local demonstrations; a production integration supplies
-its own `ChallengeVerifier`.
+restricted to synthetic local demonstrations. A production integration uses
+Registry Messaging or supplies its own `ChallengeVerifier`.
 
 ## eSignet configuration
 
