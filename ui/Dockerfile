@@ -9,7 +9,7 @@ COPY ui/default-locale.patch ui/dependencies.patch /tmp/
 RUN apk add --no-cache git && git apply --check /tmp/default-locale.patch /tmp/dependencies.patch \
     && git apply /tmp/default-locale.patch /tmp/dependencies.patch
 WORKDIR /src/oidc-ui
-RUN echo '6903558c488295fee37b6f8cea22e7e9508748cdfe631c7751b3a26987d45ecf  package-lock.json' \
+RUN echo '751f69f191abd70c15cc24609e971bdb13ea1f55439889e0eea392f8d80e365a  package-lock.json' \
       | sha256sum -c - \
     && npm ci \
     && VITE_API_URL= npm run build
@@ -28,7 +28,7 @@ LABEL org.opencontainers.image.source="https://github.com/registrystack/esignet-
       io.registry.esignet.source="https://github.com/mosip/esignet" \
       io.registry.esignet.revision=$ESIGNET_COMMIT \
       io.registry.esignet.version="2.0.0" \
-      io.registry.esignet.ui.lock.sha256="6903558c488295fee37b6f8cea22e7e9508748cdfe631c7751b3a26987d45ecf"
+      io.registry.esignet.ui.lock.sha256="751f69f191abd70c15cc24609e971bdb13ea1f55439889e0eea392f8d80e365a"
 COPY --from=ui-build /src/oidc-ui/dist /usr/share/nginx/html
 COPY --from=ui-build /src/LICENSE /src/THIRD-PARTY-NOTICES.txt /licenses/esignet/
 COPY ui/nginx.conf /etc/nginx/esignet-ui.conf
