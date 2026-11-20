@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,23 +17,39 @@ type tokenFlight struct {
 	err  error
 }
 
+// tokenSource obtains and caches access tokens for one resource and scope set.
+// Every source authenticates as the same client with the same private key.
+type tokenSource struct {
+	owner         *Provider
+	resource      string
+	scopes        []string
+	mu            sync.Mutex
+	token         []byte
+	tokenDeadline time.Time
+	acquiring     *tokenFlight
+}
+
+func newTokenSource(owner *Provider, resource string, scopes []string) tokenSource {
+	return tokenSource{owner: owner, resource: resource, scopes: append([]string(nil), scopes...)}
+}
+
 // accessToken coalesces acquisition while allowing waiters to honor cancellation.
 // A failed acquisition is never cached; the initiating call is never replayed.
-func (p *Provider) accessToken(ctx context.Context) (string, error) {
+func (t *tokenSource) accessToken(ctx context.Context) (string, error) {
 	for {
 		if ctx.Err() != nil {
 			return "", ErrUnavailable
 		}
-		p.mu.Lock()
-		if len(p.token) > 0 && p.now().Before(p.tokenDeadline) {
-			token := string(p.token)
-			p.mu.Unlock()
+		t.mu.Lock()
+		if len(t.token) > 0 && t.owner.now().Before(t.tokenDeadline) {
+			token := string(t.token)
+			t.mu.Unlock()
 			return token, nil
 		}
-		clear(p.token)
-		p.token = nil
-		if wait := p.acquiring; wait != nil {
-			p.mu.Unlock()
+		clear(t.token)
+		t.token = nil
+		if wait := t.acquiring; wait != nil {
+			t.mu.Unlock()
 			select {
 			case <-wait.done:
 				if wait.err != nil {
@@ -44,46 +61,48 @@ func (p *Provider) accessToken(ctx context.Context) (string, error) {
 			}
 		}
 		flight := &tokenFlight{done: make(chan struct{})}
-		p.acquiring = flight
-		p.mu.Unlock()
-		start := p.now()
-		token, lifetime, err := p.acquire(ctx, start)
-		p.mu.Lock()
+		t.acquiring = flight
+		t.mu.Unlock()
+		start := t.owner.now()
+		token, lifetime, err := t.acquire(ctx, start)
+		t.mu.Lock()
 		if err == nil {
 			deadline := start.Add(lifetime)
-			if !p.now().Before(deadline) {
+			if !t.owner.now().Before(deadline) {
 				err = ErrUnavailable
 			} else {
-				p.token = []byte(token)
-				p.tokenDeadline = deadline
+				t.token = []byte(token)
+				t.tokenDeadline = deadline
 			}
 		}
 		flight.err = err
-		p.acquiring = nil
+		t.acquiring = nil
 		close(flight.done)
-		p.mu.Unlock()
+		t.mu.Unlock()
 		if err != nil {
 			return "", err
 		}
 		return token, nil
 	}
 }
-func (p *Provider) invalidate(token string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if string(p.token) == token {
-		clear(p.token)
-		p.token = nil
-		p.tokenDeadline = time.Time{}
+func (t *tokenSource) invalidate(token string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if string(t.token) == token {
+		clear(t.token)
+		t.token = nil
+		t.tokenDeadline = time.Time{}
 	}
 }
-func (p *Provider) acquire(ctx context.Context, start time.Time) (string, time.Duration, error) {
-	assertion, e := p.key.assertion(p.config.TokenClient.ClientID, p.config.TokenClient.AssertionAudience, start.Unix(), start.Unix()+int64(p.config.TokenClient.AssertionTTLSeconds))
+func (t *tokenSource) acquire(ctx context.Context, start time.Time) (string, time.Duration, error) {
+	p := t.owner
+	c := p.config.TokenClient
+	assertion, e := p.key.assertion(c.ClientID, c.AssertionAudience, start.Unix(), start.Unix()+int64(c.AssertionTTLSeconds))
 	if e != nil {
 		return "", 0, ErrUnavailable
 	}
-	form := url.Values{"grant_type": {"client_credentials"}, "client_id": {p.config.TokenClient.ClientID}, "client_assertion_type": {"urn:ietf:params:oauth:client-assertion-type:jwt-bearer"}, "client_assertion": {assertion}, "resource": {p.config.TokenClient.Resource}, "scope": {strings.Join(p.config.TokenClient.Scopes, " ")}}
-	req, e := http.NewRequestWithContext(ctx, http.MethodPost, p.config.TokenClient.TokenEndpoint, strings.NewReader(form.Encode()))
+	form := url.Values{"grant_type": {"client_credentials"}, "client_id": {c.ClientID}, "client_assertion_type": {"urn:ietf:params:oauth:client-assertion-type:jwt-bearer"}, "client_assertion": {assertion}, "resource": {t.resource}, "scope": {strings.Join(t.scopes, " ")}}
+	req, e := http.NewRequestWithContext(ctx, http.MethodPost, c.TokenEndpoint, strings.NewReader(form.Encode()))
 	if e != nil {
 		return "", 0, ErrUnavailable
 	}
@@ -107,7 +126,7 @@ func (p *Provider) acquire(ctx context.Context, start time.Time) (string, time.D
 		if !valid {
 			return "", 0, ErrUnavailable
 		}
-		for _, requested := range p.config.TokenClient.Scopes {
+		for _, requested := range t.scopes {
 			if !contains(granted, requested) {
 				return "", 0, ErrUnavailable
 			}
@@ -118,7 +137,7 @@ func (p *Provider) acquire(ctx context.Context, start time.Time) (string, time.D
 			return "", 0, ErrUnavailable
 		}
 	}
-	max := int64(p.config.TokenClient.TokenCacheMaxSeconds)
+	max := int64(c.TokenCacheMaxSeconds)
 	if out.ExpiresIn > max {
 		out.ExpiresIn = max
 	}
@@ -128,7 +147,7 @@ func (p *Provider) lookup(ctx context.Context, id string, fields []string) (map[
 	if len(fields) == 0 {
 		return nil, ErrInvalidRequest
 	}
-	token, e := p.accessToken(ctx)
+	token, e := p.tokens.accessToken(ctx)
 	if e != nil {
 		return nil, ErrUnavailable
 	}
@@ -164,7 +183,7 @@ func (p *Provider) lookup(ctx context.Context, id string, fields []string) (map[
 		case "lookup.unresolved", "resource.not_found":
 			return nil, ErrSubjectDenied
 		case "authentication.refused":
-			p.invalidate(token)
+			p.tokens.invalidate(token)
 		}
 		return nil, ErrUnavailable
 	}

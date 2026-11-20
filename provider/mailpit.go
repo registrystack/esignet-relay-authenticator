@@ -2,49 +2,24 @@ package provider
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"fmt"
-	"io"
-	"math/big"
 	"net"
 	"net/smtp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
 // The Mailpit verifier is synthetic and process-local. Its recipient is fixed
 // by the operator; possession of the Mailpit inbox is not identity proof.
-const (
-	mailpitChallengeTTL = 5 * time.Minute
-	mailpitMaxPending   = 1024
-	mailpitMaxAttempts  = 5
-)
-
-type mailpitKey struct {
-	identifier, identifierType string
-	binding                    Binding
-}
-type mailpitChallenge struct {
-	digest   [32]byte
-	salt     [16]byte
-	expires  time.Time
-	attempts int
-}
 type mailpitVerifier struct {
-	config   MailpitConfig
-	timeout  time.Duration
-	now      func() time.Time
-	mu       sync.Mutex
-	pending  map[mailpitKey]mailpitChallenge
-	inFlight int
+	*challengeStore
+	config  MailpitConfig
+	timeout time.Duration
 }
 
 func newMailpitVerifier(c MailpitConfig, timeout time.Duration) *mailpitVerifier {
-	return &mailpitVerifier{config: c, timeout: timeout, now: time.Now, pending: make(map[mailpitKey]mailpitChallenge)}
+	return &mailpitVerifier{challengeStore: newChallengeStore(defaultChallengeTTL), config: c, timeout: timeout}
 }
 
 func validMailpitAddress(address string) bool {
@@ -77,77 +52,30 @@ func (v *mailpitVerifier) SendOTP(ctx context.Context, r OTPRequest) error {
 	if len(r.Channels) != 1 || r.Channels[0] != "email" || !validBinding(r.Binding) || !validText(r.Identifier) || !validText(r.IdentifierType) {
 		return ErrInvalidRequest
 	}
-	key := mailpitKey{r.Identifier, r.IdentifierType, r.Binding}
-	v.mu.Lock()
-	for k, challenge := range v.pending {
-		if !v.now().Before(challenge.expires) {
-			delete(v.pending, k)
-		}
-	}
-	if len(v.pending)+v.inFlight >= mailpitMaxPending {
-		v.mu.Unlock()
-		return ErrUnavailable
-	}
-	v.inFlight++
-	v.mu.Unlock()
-	defer func() { v.mu.Lock(); v.inFlight--; v.mu.Unlock() }()
-
-	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
+	release, err := v.begin()
 	if err != nil {
-		return ErrUnavailable
+		return err
 	}
-	code := fmt.Sprintf("%06d", n.Int64())
-	var challenge mailpitChallenge
-	if _, err := rand.Read(challenge.salt[:]); err != nil {
-		return ErrUnavailable
+	defer release()
+	code, c, err := v.generate()
+	if err != nil {
+		return err
 	}
-	challenge.digest = mailpitDigest(challenge.salt, code)
-	challenge.expires = v.now().Add(mailpitChallengeTTL)
 	if err := v.deliver(ctx, code); err != nil {
 		return ErrUnavailable
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	v.mu.Lock()
-	v.pending[key] = challenge
-	v.mu.Unlock()
+	v.put(challengeKey{r.Identifier, r.IdentifierType, r.Binding}, c)
 	return nil
-}
-
-func mailpitDigest(salt [16]byte, code string) [32]byte {
-	h := sha256.New()
-	_, _ = h.Write(salt[:])
-	_, _ = io.WriteString(h, code)
-	var digest [32]byte
-	copy(digest[:], h.Sum(nil))
-	return digest
 }
 
 func (v *mailpitVerifier) Verify(ctx context.Context, r ChallengeRequest) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	key := mailpitKey{r.Identifier, r.IdentifierType, r.Binding}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	challenge, ok := v.pending[key]
-	if !ok || !v.now().Before(challenge.expires) {
-		delete(v.pending, key)
-		return ErrChallengeFailed
-	}
-	challenge.attempts++
-	submitted := mailpitDigest(challenge.salt, r.Challenge)
-	match := subtle.ConstantTimeCompare(challenge.digest[:], submitted[:]) == 1
-	if match || challenge.attempts >= mailpitMaxAttempts {
-		delete(v.pending, key)
-	} else {
-		v.pending[key] = challenge
-	}
-	if !match {
-		return ErrChallengeFailed
-	}
-	return nil
+	return v.check(challengeKey{r.Identifier, r.IdentifierType, r.Binding}, r.Challenge)
 }
 
 func (v *mailpitVerifier) deliver(ctx context.Context, code string) error {

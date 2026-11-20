@@ -14,23 +14,19 @@ import (
 	"net"
 	"net/http"
 	"sort"
-	"sync"
 	"time"
 )
 
 const contextTTL = 300 * time.Second
 
 type Provider struct {
-	config        Config
-	verifier      ChallengeVerifier
-	secret        []byte
-	key           assertionKey
-	http          *http.Client
-	now           func() time.Time
-	mu            sync.Mutex
-	token         []byte
-	tokenDeadline time.Time
-	acquiring     *tokenFlight
+	config   Config
+	verifier ChallengeVerifier
+	secret   []byte
+	key      assertionKey
+	http     *http.Client
+	now      func() time.Time
+	tokens   tokenSource
 }
 
 func New(c Config, options ...Option) (*Provider, error) {
@@ -48,6 +44,7 @@ func New(c Config, options ...Option) (*Provider, error) {
 	c.BREG.AccountCheckFields = append([]string(nil), c.BREG.AccountCheckFields...)
 	c.TokenClient.Scopes = append([]string(nil), c.TokenClient.Scopes...)
 	p := &Provider{config: c, now: time.Now}
+	p.tokens = newTokenSource(p, c.TokenClient.Resource, c.TokenClient.Scopes)
 	for _, o := range options {
 		if o != nil {
 			o(p)

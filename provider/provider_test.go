@@ -421,7 +421,7 @@ func TestCacheDeadlineFromAcquisitionStartAndCap(t *testing.T) {
 				}
 				fmt.Fprintf(w, `{"access_token":"cache-token","token_type":"Bearer","expires_in":%d}`, expiry)
 			}
-			_, e := f.p.accessToken(context.Background())
+			_, e := f.p.tokens.accessToken(context.Background())
 			if tc.wantErr {
 				if e != ErrUnavailable {
 					t.Fatal("expired acquisition returned token")
@@ -432,7 +432,7 @@ func TestCacheDeadlineFromAcquisitionStartAndCap(t *testing.T) {
 				t.Fatal(e)
 			}
 			tick.Add(tc.after)
-			_, e = f.p.accessToken(context.Background())
+			_, e = f.p.tokens.accessToken(context.Background())
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -445,14 +445,14 @@ func TestCacheDeadlineFromAcquisitionStartAndCap(t *testing.T) {
 func TestCacheWaiterCancellationAndFailure(t *testing.T) {
 	f := newFixture(t)
 	flight := &tokenFlight{done: make(chan struct{})}
-	f.p.acquiring = flight
+	f.p.tokens.acquiring = flight
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, e := f.p.accessToken(ctx); e != ErrUnavailable {
+	if _, e := f.p.tokens.accessToken(ctx); e != ErrUnavailable {
 		t.Fatal("cancellation ignored")
 	}
 	finished := make(chan error, 1)
-	go func() { _, e := f.p.accessToken(context.Background()); finished <- e }()
+	go func() { _, e := f.p.tokens.accessToken(context.Background()); finished <- e }()
 	flight.err = ErrUnavailable
 	close(flight.done)
 	if e := <-finished; e != ErrUnavailable {
