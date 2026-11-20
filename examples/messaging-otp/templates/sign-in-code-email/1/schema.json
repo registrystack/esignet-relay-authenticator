@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "minutes"],
+  "properties": {
+    "code": {"type": "string", "pattern": "^[0-9]{6}$"},
+    "minutes": {"type": "integer", "minimum": 1, "maximum": 60}
+  }
+}

@@ -1,0 +1,5 @@
+apiVersion: id.registrystack.org/formats/messaging/template/v1alpha1
+kind: MessagingTemplate
+channel: sms
+locales: [en]
+parts: [text]
