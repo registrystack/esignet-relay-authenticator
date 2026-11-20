@@ -27,21 +27,11 @@ type Provider struct {
 	http     *http.Client
 	now      func() time.Time
 	tokens   tokenSource
+	signal   func(OperatorEvent)
 }
 
 func New(c Config, options ...Option) (*Provider, error) {
-	c.defaults()
-	if err := c.validate(); err != nil {
-		return nil, err
-	}
-	// Detach mutable configuration from the caller.
-	m := make(map[string]string, len(c.ClaimMap))
-	for k, v := range c.ClaimMap {
-		m[k] = v
-	}
-	c.ClaimMap = m
-	c.BREG.ProvisionedFields = append([]string(nil), c.BREG.ProvisionedFields...)
-	c.BREG.AccountCheckFields = append([]string(nil), c.BREG.AccountCheckFields...)
+	// Detach the Messaging block first: defaults() writes through it.
 	if c.Messaging != nil {
 		m := *c.Messaging
 		m.TokenScopes = append([]string(nil), m.TokenScopes...)
@@ -55,6 +45,18 @@ func New(c Config, options ...Option) (*Provider, error) {
 		}
 		c.Messaging = &m
 	}
+	c.defaults()
+	if err := c.validate(); err != nil {
+		return nil, err
+	}
+	// Detach the remaining mutable configuration from the caller.
+	m := make(map[string]string, len(c.ClaimMap))
+	for k, v := range c.ClaimMap {
+		m[k] = v
+	}
+	c.ClaimMap = m
+	c.BREG.ProvisionedFields = append([]string(nil), c.BREG.ProvisionedFields...)
+	c.BREG.AccountCheckFields = append([]string(nil), c.BREG.AccountCheckFields...)
 	c.TokenClient.Scopes = append([]string(nil), c.TokenClient.Scopes...)
 	p := &Provider{config: c, now: time.Now}
 	p.tokens = newTokenSource(p, c.TokenClient.Resource, c.TokenClient.Scopes)

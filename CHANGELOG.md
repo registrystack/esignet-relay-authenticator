@@ -5,10 +5,17 @@
 - Add a production one-time-code path through Registry Messaging, configured by a
   top-level `messaging` block. The provider reads the person's contact from BREG,
   generates a single-use code and asks Messaging to send it from a reviewed email
-  or SMS template. Unknown, ineligible and contactless people get the same
-  result as a successful send. Resends are limited by a per-person cooldown and
-  an hourly budget. Messaging keeps the rendered code for its payload retention
-  period, so its operators can read a live code during its validity.
+  or SMS template. The send runs after the request returns, so known, unknown,
+  ineligible, contactless and limited people get the same result and a failed
+  send is reported only through the new `provider.WithOperatorSignal` option. One
+  BREG lookup reads every requested channel and the first with a valid contact
+  is used, email before phone. Resends are limited by a per-person cooldown and
+  an hourly budget, and ten failed verifications in an hour lock a person out
+  until the hour ends. Limiter entries are keyed by an HMAC of the identifier.
+  The limiter and the pending-code store are bounded, by `max_tracked_people`
+  (default 100000) and `max_pending_codes` (default 1024). Messaging keeps the
+  rendered message for its payload retention period, so database readers,
+  backups and the email or SMS provider can see a live code during its validity.
 - Add `examples/messaging-otp`, a Messaging package with an email template, an SMS
   template, their sender profiles and an access profile for this client.
 - Share the challenge handling between the Mailpit and Messaging verifiers, and

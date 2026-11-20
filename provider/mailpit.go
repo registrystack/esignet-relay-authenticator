@@ -19,7 +19,7 @@ type mailpitVerifier struct {
 }
 
 func newMailpitVerifier(c MailpitConfig, timeout time.Duration) *mailpitVerifier {
-	return &mailpitVerifier{challengeStore: newChallengeStore(defaultChallengeTTL), config: c, timeout: timeout}
+	return &mailpitVerifier{challengeStore: newChallengeStore(defaultChallengeTTL, defaultMaxPendingCodes), config: c, timeout: timeout}
 }
 
 func validMailpitAddress(address string) bool {

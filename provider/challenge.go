@@ -13,9 +13,9 @@ import (
 
 // Defaults shared by the verifiers that issue one-time codes.
 const (
-	defaultChallengeTTL  = 5 * time.Minute
-	challengeMaxPending  = 1024
-	challengeMaxAttempts = 5
+	defaultChallengeTTL    = 5 * time.Minute
+	defaultMaxPendingCodes = 1024
+	challengeMaxAttempts   = 5
 )
 
 // challengeKey binds a code to the exact person and flow it was issued for.
@@ -35,15 +35,16 @@ type challenge struct {
 // challengeStore issues and checks single-use codes. Pending challenges live in
 // process memory, so a restart drops them and a deployment runs one replica.
 type challengeStore struct {
-	ttl      time.Duration
-	now      func() time.Time
-	mu       sync.Mutex
-	pending  map[challengeKey]challenge
-	inFlight int
+	ttl        time.Duration
+	maxPending int
+	now        func() time.Time
+	mu         sync.Mutex
+	pending    map[challengeKey]challenge
+	inFlight   int
 }
 
-func newChallengeStore(ttl time.Duration) *challengeStore {
-	return &challengeStore{ttl: ttl, now: time.Now, pending: make(map[challengeKey]challenge)}
+func newChallengeStore(ttl time.Duration, maxPending int) *challengeStore {
+	return &challengeStore{ttl: ttl, maxPending: maxPending, now: time.Now, pending: make(map[challengeKey]challenge)}
 }
 
 // begin drops expired challenges and reserves capacity for one new challenge.
@@ -56,7 +57,7 @@ func (s *challengeStore) begin() (func(), error) {
 			delete(s.pending, k)
 		}
 	}
-	if len(s.pending)+s.inFlight >= challengeMaxPending {
+	if len(s.pending)+s.inFlight >= s.maxPending {
 		return nil, ErrUnavailable
 	}
 	s.inFlight++
@@ -79,16 +80,30 @@ func (s *challengeStore) generate() (string, challenge, error) {
 	return code, c, nil
 }
 
-func (s *challengeStore) put(k challengeKey, c challenge) {
+func (s *challengeStore) put(k challengeKey, c challenge) { s.swap(k, c) }
+
+// swap stores c and returns the challenge it replaced, if any.
+func (s *challengeStore) swap(k challengeKey, c challenge) (previous challenge, replaced bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous, replaced = s.pending[k]
 	s.pending[k] = c
-	s.mu.Unlock()
+	return previous, replaced
 }
 
-func (s *challengeStore) discard(k challengeKey) {
+// undo removes mine, the challenge a request stored, and restores the one it
+// replaced. It does nothing once another request has replaced mine.
+func (s *challengeStore) undo(k challengeKey, mine, previous challenge, replaced bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if current, ok := s.pending[k]; !ok || current.salt != mine.salt {
+		return
+	}
+	if replaced && s.now().Before(previous.expires) {
+		s.pending[k] = previous
+		return
+	}
 	delete(s.pending, k)
-	s.mu.Unlock()
 }
 
 func challengeDigest(salt [16]byte, code string) [32]byte {

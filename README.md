@@ -93,16 +93,22 @@ address or phone number from the register, generates the code and asks Messaging
 to deliver it. The code is single use and expires in minutes. The provider holds
 only a salted digest in memory.
 
-Requesting a code never reveals whether a person exists. An unknown or ineligible
-person, or one with no contact for the channel, gets the same result as a
-successful send, and no message is sent. Resends are limited per person.
+A request for a code gives the same result for a known person, an unknown or
+ineligible person, one with no contact for the channel, and a person held by a
+resend limit. The Messaging call runs after that result is returned, so neither
+its outcome nor its duration depends on who exists. A failed send is visible only
+to the operator, through `provider.WithOperatorSignal`, which receives a fixed
+event kind and never a code, contact, identifier or Messaging response. A full
+challenge store or limiter refuses every request alike. Resends, hourly sends
+and failed verifications are limited per person, and every limit is bounded. See
+[configuration](docs/esignet-configuration.md#registry-messaging-production) for
+the bounds and what a bound costs.
 
-Messaging keeps the rendered message and the recipient for its payload retention
-period (1 to 30 days, default 7), and its operators can read them. A code that
-Messaging holds is single use and expires within minutes, so the exposure is a
-live code during its validity. That is the same class of exposure as the email or
-SMS provider itself. Choose a short payload retention period if that matters to
-your deployment.
+Messaging's API never returns the recipient, the rendered message or the template
+data. It keeps them for its payload retention period (1 to 30 days, default 7),
+so the exposure is a live code during its validity for whoever can read
+Messaging's database or backups, and for the email or SMS provider. Choose a
+short payload retention period if that matters to your deployment.
 
 Pending codes live in the memory of one provider process. Run one replica, or
 use sticky routing, and expect a restart to drop pending codes. A person then

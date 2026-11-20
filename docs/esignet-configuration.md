@@ -101,14 +101,22 @@ The provider asks [Registry Messaging](https://registrystack.org) to send the
 code. Messaging renders one reviewed template and sends it through the email or
 SMS provider the operator configured. A request for a code works like this:
 
-1. The provider looks the person up in BREG through the configured access
-   profile, reading the account-check fields and the contact field for the
-   requested channel.
-2. If the person is unknown or ineligible, or has no valid contact for the
-   channel, it sends nothing and returns the same result as a successful send.
-3. Otherwise it generates a six-digit code, keeps a salted digest, and posts the
-   message to Messaging with an `expiresAt` equal to the code's expiry, so
-   Messaging never delivers a stale code.
+1. The provider reserves room for one pending code, then looks the person up in
+   BREG through the configured access profile. One lookup reads the account-check
+   fields and the contact field of every channel that is both requested and
+   configured. eSignet requests every channel the provider advertises.
+2. If the person is unknown or ineligible, or has no valid contact for any of
+   those channels, it sends nothing and returns the same result as a successful
+   send. Otherwise it uses the first channel with a valid contact, in the fixed
+   order email, then phone.
+3. It generates a six-digit code, keeps a salted digest, starts the Messaging
+   call in the background and returns. The message carries an `expiresAt` equal to
+   the code's expiry, so Messaging does not start a delivery after the code has
+   expired. It cannot stop a delivery that is already under way and delayed.
+
+A contact is valid when Registry Messaging would accept it as a recipient. An
+email address is one `local@domain` of visible ASCII, with a dotted domain that
+neither starts nor ends with a dot, and none of `< > , ;`. A phone number is E.164.
 
 ```yaml
 breg:
@@ -121,6 +129,8 @@ messaging:
   code_ttl_seconds: 300
   resend_cooldown_seconds: 60
   max_sends_per_hour: 5
+  max_tracked_people: 100000
+  max_pending_codes: 1024
   contact_fields:
     email: email-address
     phone: phone-number
@@ -144,6 +154,8 @@ messaging:
 | `code_ttl_seconds` | Code lifetime. Default 300, from 60 to 900. |
 | `resend_cooldown_seconds` | Minimum gap between sends to one person on one transaction. Default 60, from 1 to 3600. |
 | `max_sends_per_hour` | Sends to one person in any hour, across transactions. Default 5, from 1 to 60. |
+| `max_tracked_people` | People the limiter tracks at once. Default 100000, from 1 to 10000000. |
+| `max_pending_codes` | Codes that may be pending at once. Default 1024, from 1 to 1000000. |
 | `contact_fields` | The BREG field holding the contact for each channel. Each must appear in `breg.provisioned_fields`. |
 | `channels` | One entry per offered channel, `email` or `phone`. Only configured channels are advertised to eSignet. |
 
@@ -161,25 +173,64 @@ profile must list the client, the scopes, the sender profiles and the templates.
 The `http` settings (timeout, CA file, response limit and the insecure HTTP
 rule) apply to Messaging calls too.
 
-Each send carries a random `Idempotency-Key` and is not retried. If Messaging
-cannot be reached or refuses the message, the request fails as unavailable and
-the resend cooldown is released. If the outcome is unknown, such as a timeout,
-the code stays valid in case the message arrives.
+Each send carries a random `Idempotency-Key`. The provider does not retry it,
+but Go's HTTP transport may replay it once on a stale keep-alive connection.
+That is harmless, because Messaging answers a repeated key and body with the
+stored receipt.
 
-Resend limits answer silently. A request inside the cooldown or over the hourly
-budget gets the same result as a successful send and sends nothing, so a caller
-cannot tell a known person from an unknown one by the limits. The earlier code
-stays valid until it expires. Limits are held in process memory and bounded.
+The call runs on its own context with a timeout of twice `http.timeout_seconds`,
+and at most 64 calls run at once. A call past that limit is dropped. The caller
+sees a successful send in every case, so the operator needs a signal. Pass
+`provider.WithOperatorSignal(func(provider.OperatorEvent) {})` to `provider.New`.
+It must be safe for concurrent use and must not block. It receives one of these
+fixed kinds and never a code, contact, identifier or Messaging response:
+
+| Event | Meaning | What happened to the code |
+| --- | --- | --- |
+| `send-refused` | Messaging answered with a 4xx, for example a rate limit or an unknown template. | Removed. A resend restores the earlier code. The budget is refunded. |
+| `send-failed` | The call could not be made or its outcome is unknown, for example a timeout. | Kept when the outcome is unknown, in case the message arrives. |
+| `send-dropped` | 64 calls were already running. | Not issued. The budget is refunded. |
+| `limiter-full` | The limiter is at `max_tracked_people`. The request was refused. | None issued. |
+| `store-full` | The pending-code store is at `max_pending_codes`. The request was refused. | None issued. |
+
+Every sign-in code shares Messaging's access profile limits, so a rate limit
+there refuses sends for everyone until it passes. Watch `send-refused`.
+
+### Limits and bounds
+
+All limits are held in process memory, keyed per person by an HMAC of the
+identifier type and identifier under a random key that lives as long as the
+process. A restart clears them.
+
+| Limit | Default | At the limit |
+| --- | --- | --- |
+| Resend cooldown, per person and transaction | 60 s | The request returns as for a successful send and nothing is sent. The earlier code stays valid until it expires. |
+| Sends per person per hour | 5 | The same silent result until the hour passes. |
+| Failed verifications per person | 10 per hour | Codes stop being issued and accepted for that person until the hour ends. A send is silent and a verification answers as for a wrong code. A success resets the count. |
+| Attempts per code | 5 | The code is consumed. |
+| People tracked (`max_tracked_people`) | 100000 | A request for a person not yet tracked fails as unavailable and raises `limiter-full`. People already tracked are unaffected, and entries with nothing live are dropped first. |
+| Pending codes (`max_pending_codes`) | 1024 | Every request fails as unavailable and raises `store-full`, whoever it names. Expired codes are dropped first. |
+
+Because every request names a person, each bound can be used up by guessing
+identifiers. Filling the people bound takes `max_tracked_people` distinct
+identifiers within an hour, and filling the code store takes `max_pending_codes`
+requests for people who exist. Run a per-client rate limit in front of eSignet.
+The provider does not rate limit by caller. The pending-code default also caps
+legitimate use: with the default five-minute lifetime and unused codes, about
+200 new codes a minute. Raise `max_pending_codes` for a national deployment.
+
+The per-person limits can be used against a named person. Anyone who knows an
+identifier can use up its hourly budget with a few requests, so that person is
+told a code was sent while nothing arrives, for up to an hour. Anyone can also
+lock a named person out for an hour with ten wrong codes. Any per-person limit
+has this weakness. Edge rate limiting is the mitigation.
 
 What this does not hide:
 
-- Messaging keeps the rendered message and the recipient for its payload
-  retention period (1 to 30 days, default 7), and its submitter and operator
-  profiles can read it. A code is single use and expires in minutes, so the
-  exposure is a live code during its validity. This is the same class of
-  exposure as the email or SMS provider itself.
-- A request for an unknown person returns faster than one that sends a message.
-  The result is identical, but the timing is not.
+- Messaging's API never returns the recipient, the rendered message or the
+  template data. It keeps them for its payload retention period (1 to 30 days,
+  default 7). The exposure is a live code during its validity for whoever can
+  read Messaging's database or backups, and for the email or SMS provider.
 - Pending codes and limits live in one process. Run one replica or use sticky
   routing. A restart drops pending codes.
 

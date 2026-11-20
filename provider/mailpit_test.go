@@ -140,7 +140,7 @@ func TestMailpitAttemptsAndCapacity(t *testing.T) {
 	if err := v.Verify(context.Background(), ChallengeRequest{Identifier: r.Identifier, IdentifierType: r.IdentifierType, Binding: r.Binding, Challenge: code}); err != ErrChallengeFailed {
 		t.Fatal("code accepted after attempt limit")
 	}
-	for i := 0; i < challengeMaxPending; i++ {
+	for i := 0; i < defaultMaxPendingCodes; i++ {
 		v.pending[challengeKey{identifier: fmt.Sprintf("%d", i)}] = challenge{expires: time.Now().Add(time.Minute)}
 	}
 	if err := v.SendOTP(context.Background(), r); err != ErrUnavailable {

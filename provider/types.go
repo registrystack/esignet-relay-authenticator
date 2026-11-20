@@ -41,3 +41,25 @@ type AuthenticationResult struct {
 type Option func(*Provider)
 
 func WithChallengeVerifier(v ChallengeVerifier) Option { return func(p *Provider) { p.verifier = v } }
+
+// OperatorEvent names a condition an operator may need to act on. It carries no
+// code, contact, identifier or Messaging response.
+type OperatorEvent string
+
+const (
+	// EventSendRefused: Registry Messaging refused a message, so no message went out.
+	EventSendRefused OperatorEvent = "send-refused"
+	// EventSendFailed: a message could not be handed to Registry Messaging and its outcome is unknown.
+	EventSendFailed OperatorEvent = "send-failed"
+	// EventSendDropped: too many sends were in flight, so a message was not sent.
+	EventSendDropped OperatorEvent = "send-dropped"
+	// EventLimiterFull: the per-person limiter reached its bound and refused a request.
+	EventLimiterFull OperatorEvent = "limiter-full"
+	// EventStoreFull: the pending challenge store reached its bound and refused a request.
+	EventStoreFull OperatorEvent = "store-full"
+)
+
+// WithOperatorSignal reports operator events. The function is called from
+// several goroutines, must not block, and receives only the event kind. A
+// sign-in code that is silently not sent is visible nowhere else.
+func WithOperatorSignal(f func(OperatorEvent)) Option { return func(p *Provider) { p.signal = f } }

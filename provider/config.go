@@ -70,6 +70,8 @@ type MessagingConfig struct {
 	CodeTTLSeconds        int                               `yaml:"code_ttl_seconds"`
 	ResendCooldownSeconds int                               `yaml:"resend_cooldown_seconds"`
 	MaxSendsPerHour       int                               `yaml:"max_sends_per_hour"`
+	MaxTrackedPeople      int                               `yaml:"max_tracked_people"`
+	MaxPendingCodes       int                               `yaml:"max_pending_codes"`
 	ContactFields         map[string]string                 `yaml:"contact_fields"`
 	Channels              map[string]MessagingChannelConfig `yaml:"channels"`
 }
@@ -145,6 +147,12 @@ func (c *Config) defaults() {
 		if m.MaxSendsPerHour == 0 {
 			m.MaxSendsPerHour = 5
 		}
+		if m.MaxTrackedPeople == 0 {
+			m.MaxTrackedPeople = defaultMaxTrackedPeople
+		}
+		if m.MaxPendingCodes == 0 {
+			m.MaxPendingCodes = defaultMaxPendingCodes
+		}
 	}
 }
 func (c Config) validate() error {
@@ -216,13 +224,15 @@ func (m *MessagingConfig) validate(check func(bool, string), provisioned []strin
 	check(m.CodeTTLSeconds >= 60 && m.CodeTTLSeconds <= 900, "messaging.code_ttl_seconds")
 	check(m.ResendCooldownSeconds >= 1 && m.ResendCooldownSeconds <= 3600, "messaging.resend_cooldown_seconds")
 	check(m.MaxSendsPerHour >= 1 && m.MaxSendsPerHour <= 60, "messaging.max_sends_per_hour")
+	check(m.MaxTrackedPeople >= 1 && m.MaxTrackedPeople <= 10_000_000, "messaging.max_tracked_people")
+	check(m.MaxPendingCodes >= 1 && m.MaxPendingCodes <= 1_000_000, "messaging.max_pending_codes")
 	channels := true
 	for name, ch := range m.Channels {
 		if name != "email" && name != "phone" {
 			channels = false
 			continue
 		}
-		check(validMessagingToken(ch.SenderProfile) && validMessagingToken(ch.TemplateID) && validMessagingToken(ch.TemplateVersion) && validMessagingToken(ch.Locale), "messaging.channels."+name)
+		check(validMessagingToken(ch.SenderProfile) && validMessagingToken(ch.TemplateID) && validTemplateVersion(ch.TemplateVersion) && validMessagingToken(ch.Locale), "messaging.channels."+name)
 	}
 	check(channels && len(m.Channels) > 0, "messaging.channels")
 	contacts := len(m.ContactFields) == len(m.Channels)
@@ -233,6 +243,21 @@ func (m *MessagingConfig) validate(check func(bool, string), provisioned []strin
 		}
 	}
 	check(contacts, "messaging.contact_fields")
+}
+
+// validTemplateVersion applies Registry Messaging's rule for a template
+// version: 1 to 32 lowercase letters, digits, dots or hyphens, starting with a
+// letter or digit, with no empty dot-separated run.
+func validTemplateVersion(s string) bool {
+	if s == "" || len(s) > 32 || !(s[0] >= 'a' && s[0] <= 'z' || s[0] >= '0' && s[0] <= '9') {
+		return false
+	}
+	for _, b := range []byte(s) {
+		if !(b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '.' || b == '-') {
+			return false
+		}
+	}
+	return !strings.Contains(s, "..") && !strings.HasSuffix(s, ".")
 }
 
 // validMessagingToken accepts the visible ASCII identifiers Registry Messaging uses.
