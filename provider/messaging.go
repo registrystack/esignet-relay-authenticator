@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +25,7 @@ const (
 	// window, after which codes stop being issued and accepted for that person.
 	failureLockThreshold = 10
 	limiterWindow        = time.Hour
+	sweepInterval        = time.Second
 	maxMessagingEmail    = 254
 )
 
@@ -59,6 +59,9 @@ type messagingVerifier struct {
 	limits *personLimiter
 	slots  chan struct{}
 	sends  sync.WaitGroup
+
+	sweepMu   sync.Mutex
+	nextSweep time.Time
 }
 
 func newMessagingVerifier(p *Provider, c MessagingConfig) *messagingVerifier {
@@ -73,19 +76,36 @@ func newMessagingVerifier(p *Provider, c MessagingConfig) *messagingVerifier {
 	return v
 }
 
+// channelOrder is the preference order when a person holds a contact for more
+// than one requested channel.
+var channelOrder = []string{"email", "phone"}
+
 // channels lists the configured channels in preference order.
 func (v *messagingVerifier) channels() []string {
-	out := make([]string, 0, len(v.config.Channels))
-	for name := range v.config.Channels {
-		out = append(out, name)
+	out := make([]string, 0, len(channelOrder))
+	for _, name := range channelOrder {
+		if _, ok := v.config.Channels[name]; ok {
+			out = append(out, name)
+		}
 	}
-	sort.Strings(out)
 	return out
 }
 
-func (v *messagingVerifier) emit(e OperatorEvent) {
-	if v.p.signal != nil {
-		v.p.signal(e)
+func (v *messagingVerifier) emit(e OperatorEvent) { v.p.emit(e) }
+
+// maintain prunes the limiter and sweeps the store, at most once a second, so a
+// request never pays for a full scan and memory stays bounded below the limits.
+func (v *messagingVerifier) maintain() {
+	now := v.now()
+	v.sweepMu.Lock()
+	due := !now.Before(v.nextSweep)
+	if due {
+		v.nextSweep = now.Add(sweepInterval)
+	}
+	v.sweepMu.Unlock()
+	if due {
+		v.limits.prune()
+		v.sweep()
 	}
 }
 
@@ -94,6 +114,12 @@ func (v *messagingVerifier) emit(e OperatorEvent) {
 // The Messaging call runs after the result is returned, so its outcome cannot
 // reveal who exists. Only a malformed request, an unreachable BREG, or a full
 // challenge store or limiter (which refuse everyone alike) is an error.
+//
+// Stored state is a function of the requests received, never of what BREG or
+// Messaging answered. An admitted request spends its cooldown and hourly budget
+// and stores one challenge, whatever happens next. Nothing is refunded and no
+// answer deletes an entry. A person who retries during a Messaging outage can
+// therefore use up the hourly budget and be held silently after it ends.
 func (v *messagingVerifier) SendOTP(ctx context.Context, r OTPRequest) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -113,55 +139,51 @@ func (v *messagingVerifier) SendOTP(ctx context.Context, r OTPRequest) error {
 	if len(channels) == 0 {
 		return ErrInvalidRequest
 	}
-	// Capacity is reserved before the lookup, so a full store refuses everyone alike.
-	release, err := v.begin()
-	if err != nil {
+	v.maintain()
+	if v.full() {
 		v.emit(EventStoreFull)
-		return err
+		return ErrUnavailable
 	}
-	defer release()
-	person := v.limits.person(r.IdentifierType, r.Identifier)
-	adm, status := v.limits.admit(person, r.Binding)
-	switch status {
+	switch v.limits.admit(v.limits.person(r.IdentifierType, r.Identifier), r.Binding) {
 	case limiterFull:
 		v.emit(EventLimiterFull)
 		return ErrUnavailable
 	case limiterHeld:
 		return nil
 	}
+	code, c, err := v.generate()
+	if err != nil {
+		return err
+	}
+	key := challengeKey{r.Identifier, r.IdentifierType, r.Binding}
 	channel, contact, err := v.contact(ctx, r.Identifier, channels)
 	if err != nil {
-		v.limits.refund(adm)
+		v.keep(key, c)
 		return err
 	}
 	if contact == "" {
+		v.keep(key, c)
 		return nil
 	}
 	select {
 	case v.slots <- struct{}{}:
 	default:
-		v.limits.refund(adm)
+		v.keep(key, c)
 		v.emit(EventSendDropped)
 		return nil
 	}
-	code, c, err := v.generate()
-	if err != nil {
-		<-v.slots
-		v.limits.refund(adm)
-		return err
-	}
-	key := challengeKey{r.Identifier, r.IdentifierType, r.Binding}
 	// The challenge exists before the call so that a code delivered after an
 	// ambiguous transport failure still verifies.
 	previous, replaced := v.swap(key, c)
 	v.sends.Add(1)
-	go v.deliver(context.WithoutCancel(ctx), adm, key, c, previous, replaced, channel, contact, code)
+	go v.deliver(context.WithoutCancel(ctx), key, c, previous, replaced, channel, contact, code)
 	return nil
 }
 
-// deliver runs one Messaging call on a context of its own and settles the
-// challenge and limits by the outcome.
-func (v *messagingVerifier) deliver(ctx context.Context, adm admission, key challengeKey, c, previous challenge, replaced bool, channel, contact, code string) {
+// deliver runs one Messaging call on a context of its own. The call lasts at
+// most twice the HTTP timeout, which the resend cooldown must cover, so two
+// sends for one person and binding never overlap.
+func (v *messagingVerifier) deliver(ctx context.Context, key challengeKey, c, previous challenge, replaced bool, channel, contact, code string) {
 	defer v.sends.Done()
 	defer func() { <-v.slots }()
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Duration(v.p.config.HTTP.TimeoutSeconds)*time.Second)
@@ -169,15 +191,12 @@ func (v *messagingVerifier) deliver(ctx context.Context, adm admission, key chal
 	switch v.send(ctx, channel, contact, code, c.expires) {
 	case sendAccepted:
 	case sendRefused:
-		v.undo(key, c, previous, replaced)
-		v.limits.refund(adm)
+		v.restore(key, c, previous, replaced)
 		v.emit(EventSendRefused)
 	case sendNotSent:
-		v.undo(key, c, previous, replaced)
-		v.limits.refund(adm)
+		v.restore(key, c, previous, replaced)
 		v.emit(EventSendFailed)
 	default:
-		v.limits.reopen(adm)
 		v.emit(EventSendFailed)
 	}
 }
@@ -185,6 +204,9 @@ func (v *messagingVerifier) deliver(ctx context.Context, adm admission, key chal
 // wait blocks until every started send has finished.
 func (v *messagingVerifier) wait() { v.sends.Wait() }
 
+// Verify counts a wrong code against the person only when a challenge was
+// pending for the binding, so verification traffic for requests nobody made
+// neither locks a person nor adds limiter entries.
 func (v *messagingVerifier) Verify(ctx context.Context, r ChallengeRequest) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -193,9 +215,11 @@ func (v *messagingVerifier) Verify(ctx context.Context, r ChallengeRequest) erro
 	if v.limits.locked(person) {
 		return ErrChallengeFailed
 	}
-	err := v.check(challengeKey{r.Identifier, r.IdentifierType, r.Binding}, r.Challenge)
+	pending, err := v.check(challengeKey{r.Identifier, r.IdentifierType, r.Binding}, r.Challenge)
 	if err != nil {
-		v.limits.fail(person)
+		if pending {
+			v.limits.fail(person)
+		}
 		return err
 	}
 	v.limits.reset(person)
@@ -303,8 +327,12 @@ func trimSlash(s string) string {
 // personLimiter spaces resends, caps sends per hour and counts failed
 // verifications, all per person. People are keyed by an HMAC of identifier type
 // and identifier under a random per-process key, so memory holds no raw
-// identifiers and entries are fixed size. It counts every admitted request, so a
-// caller cannot tell a known person from an unknown one by the limits.
+// identifiers and entries are fixed size.
+//
+// Like the challenge store, its state is a function of the requests received:
+// every admitted request is counted and nothing is refunded, so a caller cannot
+// tell a known person from an unknown one by the limits. Only admit creates an
+// entry. At its bound the limiter refuses every request, tracked or not.
 type personLimiter struct {
 	now       func() time.Time
 	cooldown  time.Duration
@@ -322,20 +350,13 @@ type personState struct {
 	failuresSince time.Time
 }
 
-// admission records what one admitted request added, so it can be reversed.
-type admission struct {
-	person  [32]byte
-	binding Binding
-	at      time.Time
-}
-
 type limiterStatus int
 
 const (
 	limiterAdmitted limiterStatus = iota
 	// limiterHeld: a cooldown, the hourly budget or a failure lock applies.
 	limiterHeld
-	// limiterFull: the limiter is at its bound and cannot track a new person.
+	// limiterFull: the limiter is at its bound and refuses every request.
 	limiterFull
 )
 
@@ -354,81 +375,36 @@ func (l *personLimiter) person(identifierType, identifier string) [32]byte {
 	return out
 }
 
-// state returns the person's entry, creating it when there is room. The caller holds l.mu.
-func (l *personLimiter) state(p [32]byte, now time.Time) (*personState, bool) {
-	if st, ok := l.people[p]; ok {
-		return st, true
-	}
-	if len(l.people) >= l.maxPeople {
-		l.prune(now)
-		if len(l.people) >= l.maxPeople {
-			return nil, false
-		}
-	}
-	st := &personState{next: map[Binding]time.Time{}}
-	l.people[p] = st
-	return st, true
-}
-
 func (st *personState) locked(now time.Time) bool {
 	return st.failures >= failureLockThreshold && now.Before(st.failuresSince.Add(limiterWindow))
 }
 
 // admit reports whether a send may proceed and records it when it may.
-func (l *personLimiter) admit(p [32]byte, b Binding) (admission, limiterStatus) {
+func (l *personLimiter) admit(p [32]byte, b Binding) limiterStatus {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if len(l.people) >= l.maxPeople {
+		return limiterFull
+	}
 	now := l.now()
-	st, ok := l.state(p, now)
+	st, ok := l.people[p]
 	if !ok {
-		return admission{}, limiterFull
+		st = &personState{next: map[Binding]time.Time{}}
+		l.people[p] = st
 	}
 	if st.locked(now) {
-		return admission{}, limiterHeld
+		return limiterHeld
 	}
 	if until, ok := st.next[b]; ok && now.Before(until) {
-		return admission{}, limiterHeld
+		return limiterHeld
 	}
 	st.trim(now)
 	if len(st.sends) >= l.perHour {
-		return admission{}, limiterHeld
+		return limiterHeld
 	}
 	st.sends = append(st.sends, now)
 	st.next[b] = now.Add(l.cooldown)
-	return admission{p, b, now}, limiterAdmitted
-}
-
-// refund reverses an admission after a send that definitely did not happen.
-func (l *personLimiter) refund(a admission) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	st, ok := l.people[a.person]
-	if !ok {
-		return
-	}
-	for i, t := range st.sends {
-		if t.Equal(a.at) {
-			st.sends = append(st.sends[:i], st.sends[i+1:]...)
-			break
-		}
-	}
-	l.reopenLocked(st, a)
-}
-
-// reopen frees the resend cooldown after a send whose outcome is unknown. The
-// hourly budget stays spent.
-func (l *personLimiter) reopen(a admission) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if st, ok := l.people[a.person]; ok {
-		l.reopenLocked(st, a)
-	}
-}
-
-func (l *personLimiter) reopenLocked(st *personState, a admission) {
-	if until, ok := st.next[a.binding]; ok && until.Equal(a.at.Add(l.cooldown)) {
-		delete(st.next, a.binding)
-	}
+	return limiterAdmitted
 }
 
 func (l *personLimiter) locked(p [32]byte) bool {
@@ -438,16 +414,16 @@ func (l *personLimiter) locked(p [32]byte) bool {
 	return ok && st.locked(l.now())
 }
 
-// fail counts one failed verification. A person the limiter cannot track keeps
-// only the per-challenge attempt limit.
+// fail counts one failed verification against a person already tracked. It
+// never creates an entry.
 func (l *personLimiter) fail(p [32]byte) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	now := l.now()
-	st, ok := l.state(p, now)
+	st, ok := l.people[p]
 	if !ok {
 		return
 	}
+	now := l.now()
 	if st.failures == 0 || !now.Before(st.failuresSince.Add(limiterWindow)) {
 		st.failures, st.failuresSince = 0, now
 	}
@@ -472,8 +448,11 @@ func (st *personState) trim(now time.Time) {
 	st.sends = kept
 }
 
-// prune drops entries with no live cooldown, budget or failure count.
-func (l *personLimiter) prune(now time.Time) {
+// prune drops expired cooldowns and sends, and entries with nothing live.
+func (l *personLimiter) prune() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
 	for p, st := range l.people {
 		st.trim(now)
 		for b, until := range st.next {

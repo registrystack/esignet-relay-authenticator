@@ -10,6 +10,7 @@ import (
 
 	"github.com/mosip/esignet/internal/clientmgmt"
 	"github.com/mosip/esignet/internal/engine/shared"
+	applog "github.com/mosip/esignet/internal/log"
 	core "github.com/registrystack/esignet-relay-authenticator/provider"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
@@ -43,7 +44,7 @@ func Init(clients *clientmgmt.Service) (shared.ConsolidatedAuthnProvider, provid
 	if err != nil {
 		return nil, nil, err
 	}
-	identity, err := core.New(cfg)
+	identity, err := core.New(cfg, core.WithOperatorSignal(operatorSignal(applog.GetLogger())))
 	if err != nil {
 		return nil, nil, err
 	}

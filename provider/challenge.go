@@ -14,7 +14,7 @@ import (
 // Defaults shared by the verifiers that issue one-time codes.
 const (
 	defaultChallengeTTL    = 5 * time.Minute
-	defaultMaxPendingCodes = 1024
+	defaultMaxPendingCodes = 100_000
 	challengeMaxAttempts   = 5
 )
 
@@ -34,34 +34,44 @@ type challenge struct {
 
 // challengeStore issues and checks single-use codes. Pending challenges live in
 // process memory, so a restart drops them and a deployment runs one replica.
+//
+// What the store holds is a function of the requests received, never of who
+// exists or of what BREG or Registry Messaging answered. Every admitted request
+// stores one challenge, a discarded one when nothing is sent, and no answer
+// deletes an entry. The one allowed exception is the value of a pending code:
+// a refused resend restores the code it replaced, matched by salt, and never
+// changes the number of entries.
 type challengeStore struct {
 	ttl        time.Duration
 	maxPending int
 	now        func() time.Time
 	mu         sync.Mutex
 	pending    map[challengeKey]challenge
-	inFlight   int
 }
 
 func newChallengeStore(ttl time.Duration, maxPending int) *challengeStore {
 	return &challengeStore{ttl: ttl, maxPending: maxPending, now: time.Now, pending: make(map[challengeKey]challenge)}
 }
 
-// begin drops expired challenges and reserves capacity for one new challenge.
-// The returned function releases the reservation and must be called once.
-func (s *challengeStore) begin() (func(), error) {
+// full reports whether the store is at its bound. It looks only at the count,
+// so it refuses every request alike. Capacity is not held across a lookup, so
+// concurrent requests can overshoot the bound by at most their number.
+func (s *challengeStore) full() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return len(s.pending) >= s.maxPending
+}
+
+// sweep drops expired challenges.
+func (s *challengeStore) sweep() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
 	for k, c := range s.pending {
-		if !s.now().Before(c.expires) {
+		if !now.Before(c.expires) {
 			delete(s.pending, k)
 		}
 	}
-	if len(s.pending)+s.inFlight >= s.maxPending {
-		return nil, ErrUnavailable
-	}
-	s.inFlight++
-	return func() { s.mu.Lock(); s.inFlight--; s.mu.Unlock() }, nil
 }
 
 // generate returns a six-digit code and the challenge that verifies it.
@@ -91,19 +101,24 @@ func (s *challengeStore) swap(k challengeKey, c challenge) (previous challenge, 
 	return previous, replaced
 }
 
-// undo removes mine, the challenge a request stored, and restores the one it
-// replaced. It does nothing once another request has replaced mine.
-func (s *challengeStore) undo(k challengeKey, mine, previous challenge, replaced bool) {
+// keep stores c only when the key holds no live challenge. A request that sends
+// nothing uses it, so the entry count matches a request that did send.
+func (s *challengeStore) keep(k challengeKey, c challenge) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if current, ok := s.pending[k]; !ok || current.salt != mine.salt {
-		return
+	if current, ok := s.pending[k]; !ok || !s.now().Before(current.expires) {
+		s.pending[k] = c
 	}
-	if replaced && s.now().Before(previous.expires) {
+}
+
+// restore puts back the value mine replaced. It never adds or removes an entry,
+// and does nothing once another request has replaced mine.
+func (s *challengeStore) restore(k challengeKey, mine, previous challenge, replaced bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if current, ok := s.pending[k]; ok && current.salt == mine.salt && replaced && s.now().Before(previous.expires) {
 		s.pending[k] = previous
-		return
 	}
-	delete(s.pending, k)
 }
 
 func challengeDigest(salt [16]byte, code string) [32]byte {
@@ -116,13 +131,15 @@ func challengeDigest(salt [16]byte, code string) [32]byte {
 }
 
 // check consumes the challenge on success, expiry or the last allowed attempt.
-func (s *challengeStore) check(k challengeKey, code string) error {
+// pending reports whether a live challenge existed, so a caller can count only
+// the failures that answer a request somebody made.
+func (s *challengeStore) check(k challengeKey, code string) (pending bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c, ok := s.pending[k]
 	if !ok || !s.now().Before(c.expires) {
 		delete(s.pending, k)
-		return ErrChallengeFailed
+		return false, ErrChallengeFailed
 	}
 	c.attempts++
 	submitted := challengeDigest(c.salt, code)
@@ -133,7 +150,7 @@ func (s *challengeStore) check(k challengeKey, code string) error {
 		s.pending[k] = c
 	}
 	if !match {
-		return ErrChallengeFailed
+		return true, ErrChallengeFailed
 	}
-	return nil
+	return true, nil
 }

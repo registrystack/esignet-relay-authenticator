@@ -130,7 +130,7 @@ messaging:
   resend_cooldown_seconds: 60
   max_sends_per_hour: 5
   max_tracked_people: 100000
-  max_pending_codes: 1024
+  max_pending_codes: 100000
   contact_fields:
     email: email-address
     phone: phone-number
@@ -152,10 +152,10 @@ messaging:
 | `base_url` | Messaging's URL. HTTPS unless `http.allow_insecure_http` is set. |
 | `token_resource`, `token_scopes` | The resource and scopes requested for the Messaging access token. The issuer must set Messaging's audience for them. |
 | `code_ttl_seconds` | Code lifetime. Default 300, from 60 to 900. |
-| `resend_cooldown_seconds` | Minimum gap between sends to one person on one transaction. Default 60, from 1 to 3600. |
+| `resend_cooldown_seconds` | Minimum gap between sends to one person on one transaction. Default 60, up to 3600, and at least twice `http.timeout_seconds` (20 with the default timeout), so two sends for one person never overlap. A smaller value is refused at startup. |
 | `max_sends_per_hour` | Sends to one person in any hour, across transactions. Default 5, from 1 to 60. |
 | `max_tracked_people` | People the limiter tracks at once. Default 100000, from 1 to 10000000. |
-| `max_pending_codes` | Codes that may be pending at once. Default 1024, from 1 to 1000000. |
+| `max_pending_codes` | Pending entries at once, one per admitted request. Default 100000, from 1 to 1000000. |
 | `contact_fields` | The BREG field holding the contact for each channel. Each must appear in `breg.provisioned_fields`. |
 | `channels` | One entry per offered channel, `email` or `phone`. Only configured channels are advertised to eSignet. |
 
@@ -179,19 +179,24 @@ That is harmless, because Messaging answers a repeated key and body with the
 stored receipt.
 
 The call runs on its own context with a timeout of twice `http.timeout_seconds`,
-and at most 64 calls run at once. A call past that limit is dropped. The caller
-sees a successful send in every case, so the operator needs a signal. Pass
+and at most 64 calls run at once. The 64 is fixed, not configurable, and a call
+past that limit is dropped and reported as `send-dropped`. The caller sees a
+successful send in every case, so the operator needs a signal.
+
+The shipped image logs one warning line per event through the host logger, with
+the event kind in an `event` field and fixed text otherwise. Library users pass
 `provider.WithOperatorSignal(func(provider.OperatorEvent) {})` to `provider.New`.
-It must be safe for concurrent use and must not block. It receives one of these
-fixed kinds and never a code, contact, identifier or Messaging response:
+It must be safe for concurrent use and must not block, and the provider contains
+a panic in it. Both receive one of these fixed kinds and never a code, contact,
+identifier or Messaging response:
 
 | Event | Meaning | What happened to the code |
 | --- | --- | --- |
-| `send-refused` | Messaging answered with a 4xx, for example a rate limit or an unknown template. | Removed. A resend restores the earlier code. The budget is refunded. |
-| `send-failed` | The call could not be made or its outcome is unknown, for example a timeout. | Kept when the outcome is unknown, in case the message arrives. |
-| `send-dropped` | 64 calls were already running. | Not issued. The budget is refunded. |
+| `send-refused` | Messaging answered with a 4xx, for example a rate limit or an unknown template. | The earlier code, if any, is restored. The cooldown and budget stay spent. |
+| `send-failed` | The call could not be made or its outcome is unknown, for example a timeout. | Kept, in case the message arrives. The cooldown and budget stay spent. |
+| `send-dropped` | 64 calls were already running. | Not sent. The cooldown and budget stay spent. |
 | `limiter-full` | The limiter is at `max_tracked_people`. The request was refused. | None issued. |
-| `store-full` | The pending-code store is at `max_pending_codes`. The request was refused. | None issued. |
+| `store-full` | The pending store is at `max_pending_codes`. The request was refused. | None issued. |
 
 Every sign-in code shares Messaging's access profile limits, so a rate limit
 there refuses sends for everyone until it passes. Watch `send-refused`.
@@ -206,24 +211,38 @@ process. A restart clears them.
 | --- | --- | --- |
 | Resend cooldown, per person and transaction | 60 s | The request returns as for a successful send and nothing is sent. The earlier code stays valid until it expires. |
 | Sends per person per hour | 5 | The same silent result until the hour passes. |
-| Failed verifications per person | 10 per hour | Codes stop being issued and accepted for that person until the hour ends. A send is silent and a verification answers as for a wrong code. A success resets the count. |
+| Failed verifications per person | 10 per hour | Counted only for a code that was requested. Codes stop being issued and accepted for that person until the hour ends. A send is silent and a verification answers as for a wrong code. A success resets the count. |
 | Attempts per code | 5 | The code is consumed. |
-| People tracked (`max_tracked_people`) | 100000 | A request for a person not yet tracked fails as unavailable and raises `limiter-full`. People already tracked are unaffected, and entries with nothing live are dropped first. |
-| Pending codes (`max_pending_codes`) | 1024 | Every request fails as unavailable and raises `store-full`, whoever it names. Expired codes are dropped first. |
+| People tracked (`max_tracked_people`) | 100000 | Every request fails as unavailable and raises `limiter-full`, including one from a person already tracked. Entries with nothing live are dropped first. |
+| Pending entries (`max_pending_codes`) | 100000 | Every request fails as unavailable and raises `store-full`, whoever it names. Expired entries are dropped first. |
+
+Every admitted request stores one pending entry and counts against its person,
+whether or not a message is sent, so neither bound reveals who exists. The
+limiter and the store are pruned at most once a second, not on every request.
+
+Practical ceilings. At the default of 100000 people, a deployment signs in about
+28 distinct people a second sustained over an hour (100000 divided by 3600). A
+pending entry lives five minutes by default, so the store allows about 333
+requests a second, and the limiter is the tighter bound. Measured on a
+development machine, a limiter entry takes about 840 bytes and a pending entry
+about 240 bytes (more for long identifiers), so the defaults hold roughly 84 MB
+and 24 MB, and one once-a-second prune of 100000 entries takes about 20 ms. Past
+a bound, new requests are refused as unavailable until entries expire. Raise the
+bound for a larger deployment and budget memory from these figures.
 
 Because every request names a person, each bound can be used up by guessing
-identifiers. Filling the people bound takes `max_tracked_people` distinct
-identifiers within an hour, and filling the code store takes `max_pending_codes`
-requests for people who exist. Run a per-client rate limit in front of eSignet.
-The provider does not rate limit by caller. The pending-code default also caps
-legitimate use: with the default five-minute lifetime and unused codes, about
-200 new codes a minute. Raise `max_pending_codes` for a national deployment.
+identifiers. Run a per-client rate limit in front of eSignet. The provider does
+not rate limit by caller.
 
 The per-person limits can be used against a named person. Anyone who knows an
 identifier can use up its hourly budget with a few requests, so that person is
-told a code was sent while nothing arrives, for up to an hour. Anyone can also
-lock a named person out for an hour with ten wrong codes. Any per-person limit
-has this weakness. Edge rate limiting is the mitigation.
+told a code was sent while nothing arrives, for up to an hour. Nothing is
+refunded, so a person who retries during a Messaging outage can use up their own
+hourly budget and be held silently after the outage ends. A wrong code locks a
+person only after they requested a code, and ten failures an hour is the
+ceiling, so sustained, loud guessing against one person reaches about 240 guesses
+a day. Any per-person limit has this weakness. Edge rate limiting is the
+mitigation.
 
 What this does not hide:
 
@@ -231,8 +250,9 @@ What this does not hide:
   template data. It keeps them for its payload retention period (1 to 30 days,
   default 7). The exposure is a live code during its validity for whoever can
   read Messaging's database or backups, and for the email or SMS provider.
-- Pending codes and limits live in one process. Run one replica or use sticky
-  routing. A restart drops pending codes.
+- Pending codes and limits live in one process. Run one replica or route each
+  eSignet session to the same replica. Per-person limits multiply by the number
+  of replicas. A restart drops pending codes.
 
 ### Bring your own verifier
 
@@ -277,7 +297,7 @@ one fixed synthetic inbox, never derived from the person's identifier or BREG
 attributes. Only email is advertised. Codes expire in five minutes, allow at
 most five wrong attempts, and are consumed on success. They bind the exact
 identifier/type, relying party, client and transaction. The process retains at
-most 1024 pending or sending challenges and loses them on restart. SMTP delivery
+most 100000 pending challenges and loses them on restart. SMTP delivery
 failure creates no new challenge. This mode uses unencrypted local SMTP and cannot
 establish ownership of a real email address or a person's identity. Keep it
 restricted to synthetic local demonstrations. A production integration uses

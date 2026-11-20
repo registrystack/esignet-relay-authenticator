@@ -52,11 +52,10 @@ func (v *mailpitVerifier) SendOTP(ctx context.Context, r OTPRequest) error {
 	if len(r.Channels) != 1 || r.Channels[0] != "email" || !validBinding(r.Binding) || !validText(r.Identifier) || !validText(r.IdentifierType) {
 		return ErrInvalidRequest
 	}
-	release, err := v.begin()
-	if err != nil {
-		return err
+	v.sweep()
+	if v.full() {
+		return ErrUnavailable
 	}
-	defer release()
 	code, c, err := v.generate()
 	if err != nil {
 		return err
@@ -75,7 +74,8 @@ func (v *mailpitVerifier) Verify(ctx context.Context, r ChallengeRequest) error 
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return v.check(challengeKey{r.Identifier, r.IdentifierType, r.Binding}, r.Challenge)
+	_, err := v.check(challengeKey{r.Identifier, r.IdentifierType, r.Binding}, r.Challenge)
+	return err
 }
 
 func (v *mailpitVerifier) deliver(ctx context.Context, code string) error {

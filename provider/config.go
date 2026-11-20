@@ -189,6 +189,9 @@ func (c Config) validate() error {
 	if m := c.Messaging; m != nil {
 		check(!c.Demo.StaticOTPEnabled && !c.Demo.Mailpit.Enabled, "demo.challenge_mode")
 		m.validate(check, c.BREG.ProvisionedFields, c.HTTP.AllowInsecureHTTP)
+		// A send lasts at most twice the HTTP timeout (token, then message), and the
+		// cooldown must outlast it so two sends for one person never overlap.
+		check(m.ResendCooldownSeconds >= 2*c.HTTP.TimeoutSeconds, "messaging.resend_cooldown_seconds (at least twice http.timeout_seconds)")
 	}
 	check(len(c.BREG.ProvisionedFields) > 0, "breg.provisioned_fields")
 	for _, s := range c.BREG.ProvisionedFields {

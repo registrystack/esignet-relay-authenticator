@@ -26,7 +26,8 @@ type sentMessage struct {
 // messagingFixture runs fakes for the token endpoint, BREG and Registry Messaging.
 type messagingFixture struct {
 	*fixture
-	server  *httptest.Server
+	server *httptest.Server
+	// mu guards every field below, because sends run on their own goroutines.
 	mu      sync.Mutex
 	sent    []sentMessage
 	handler func(http.ResponseWriter, *http.Request)
@@ -34,6 +35,30 @@ type messagingFixture struct {
 	lookup  func(http.ResponseWriter)
 	now     time.Time
 	events  []OperatorEvent
+}
+
+func (m *messagingFixture) setHandler(f func(http.ResponseWriter, *http.Request)) {
+	m.mu.Lock()
+	m.handler = f
+	m.mu.Unlock()
+}
+
+func (m *messagingFixture) setLookup(f func(http.ResponseWriter)) {
+	m.mu.Lock()
+	m.lookup = f
+	m.mu.Unlock()
+}
+
+func (m *messagingFixture) clock() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.now
+}
+
+func (m *messagingFixture) advance(d time.Duration) {
+	m.mu.Lock()
+	m.now = m.now.Add(d)
+	m.mu.Unlock()
 }
 
 func (m *messagingFixture) signal(e OperatorEvent) {
@@ -63,9 +88,10 @@ func newMessagingFixture(t *testing.T, mutate func(*Config)) *messagingFixture {
 		}
 		m.mu.Lock()
 		m.sent = append(m.sent, sentMessage{r.Header.Get("Authorization"), r.Header.Get("Idempotency-Key"), decoded})
+		handler := m.handler
 		m.mu.Unlock()
-		if m.handler != nil {
-			m.handler(w, r)
+		if handler != nil {
+			handler(w, r)
 			return
 		}
 		w.WriteHeader(http.StatusAccepted)
@@ -84,14 +110,17 @@ func newMessagingFixture(t *testing.T, mutate func(*Config)) *messagingFixture {
 		fmt.Fprintf(w, `{"access_token":%q,"token_type":"Bearer","expires_in":300}`, token)
 	}
 	m.fixture.handler = func(w http.ResponseWriter, r *http.Request) {
-		if m.lookup != nil {
-			m.lookup(w)
+		m.mu.Lock()
+		lookup, person := m.lookup, m.person
+		m.mu.Unlock()
+		if lookup != nil {
+			lookup(w)
 			return
 		}
 		selected := strings.Split(r.URL.Query().Get("$select"), ",")
 		domain := map[string]any{}
 		for _, f := range selected {
-			if v, ok := m.person[f]; ok {
+			if v, ok := person[f]; ok {
 				domain[f] = v
 			}
 		}
@@ -119,7 +148,7 @@ func newMessagingFixture(t *testing.T, mutate func(*Config)) *messagingFixture {
 		t.Fatal(err)
 	}
 	m.fixture.p = p
-	m.verifier().now = func() time.Time { return m.now }
+	m.verifier().now = m.clock
 	return m
 }
 
@@ -184,7 +213,7 @@ func TestMessagingSendReachesMessagingAndVerifiesOnce(t *testing.T) {
 		"template":      map[string]any{"id": "sign-in-code-email", "version": "1"},
 		"locale":        "en",
 		"data":          map[string]any{"code": code, "minutes": float64(5)},
-		"expiresAt":     m.now.Add(5 * time.Minute).UTC().Format(time.RFC3339),
+		"expiresAt":     m.clock().Add(5 * time.Minute).UTC().Format(time.RFC3339),
 	}
 	got, _ := json.Marshal(s.body)
 	exp, _ := json.Marshal(want)
@@ -251,11 +280,11 @@ func TestMessagingCodeExpiryAttemptsAndBinding(t *testing.T) {
 	if err := m.p.verifier.Verify(context.Background(), other); err != ErrChallengeFailed {
 		t.Fatal("code accepted for another transaction")
 	}
-	m.now = m.now.Add(5 * time.Minute)
+	m.advance(5 * time.Minute)
 	if err := m.p.verifier.Verify(context.Background(), challengeFor(code)); err != ErrChallengeFailed {
 		t.Fatal("expired code accepted")
 	}
-	m.now = m.now.Add(time.Hour)
+	m.advance(time.Hour)
 	code = send()
 	wrong := "000000"
 	if code == wrong {
@@ -287,11 +316,11 @@ func TestMessagingCooldownAndHourlyBudget(t *testing.T) {
 		t.Fatal("cooldown ignored")
 	}
 	first := m.lastCode(t)
-	m.now = m.now.Add(61 * time.Second)
+	m.advance(61 * time.Second)
 	send()
-	m.now = m.now.Add(61 * time.Second)
+	m.advance(61 * time.Second)
 	send()
-	m.now = m.now.Add(61 * time.Second)
+	m.advance(61 * time.Second)
 	send() // fourth send inside the hour
 	if m.sentCount() != 3 {
 		t.Fatalf("hourly budget ignored: %d", m.sentCount())
@@ -299,7 +328,7 @@ func TestMessagingCooldownAndHourlyBudget(t *testing.T) {
 	if err := m.p.verifier.Verify(context.Background(), challengeFor(first)); err != ErrChallengeFailed {
 		t.Fatal("superseded code accepted")
 	}
-	m.now = m.now.Add(time.Hour)
+	m.advance(time.Hour)
 	send()
 	if m.sentCount() != 4 {
 		t.Fatal("budget not restored after an hour")
@@ -340,7 +369,7 @@ func TestMessagingNoEnumeration(t *testing.T) {
 			if tc.person != nil {
 				m.person = tc.person
 			}
-			m.lookup = tc.lookup
+			m.setLookup(tc.lookup)
 			if err := m.p.SendOTP(context.Background(), otpRequest("email")); err != nil {
 				t.Fatalf("outward result differs from a successful send: %v", err)
 			}
@@ -377,43 +406,44 @@ func hasEvent(events []OperatorEvent, want OperatorEvent) bool {
 func TestMessagingSendFailuresAreSilentAndSignalled(t *testing.T) {
 	t.Run("refusal", func(t *testing.T) {
 		m := newMessagingFixture(t, nil)
-		m.handler = func(w http.ResponseWriter, _ *http.Request) {
+		m.setHandler(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			fmt.Fprint(w, `{"code":"template.locale-unavailable","detail":"ada@example.test"}`)
-		}
+		})
 		if err := m.p.SendOTP(context.Background(), otpRequest("email")); err != nil {
 			t.Fatalf("refusal reached the caller: %v", err)
 		}
 		if events := m.signals(); len(events) != 1 || events[0] != EventSendRefused {
 			t.Fatalf("wrong events %v", events)
 		}
-		if len(m.verifier().pending) != 0 {
-			t.Fatal("refused send left a usable challenge")
+		if len(m.verifier().pending) != 1 {
+			t.Fatal("a refused send must leave the entry count unchanged")
 		}
-		m.handler = nil
-		if err := m.p.SendOTP(context.Background(), otpRequest("email")); err != nil || m.sentCount() != 2 {
-			t.Fatal("refused send consumed the resend cooldown")
+		m.setHandler(nil)
+		if err := m.p.SendOTP(context.Background(), otpRequest("email")); err != nil || m.sentCount() != 1 {
+			t.Fatal("a refused send must still spend the resend cooldown")
 		}
 	})
-	t.Run("refusal refunds the hourly budget", func(t *testing.T) {
+	t.Run("refusal spends the hourly budget", func(t *testing.T) {
 		m := newMessagingFixture(t, func(c *Config) { c.Messaging.MaxSendsPerHour = 1 })
-		m.handler = func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTooManyRequests) }
+		m.setHandler(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTooManyRequests) })
 		_ = m.p.SendOTP(context.Background(), otpRequest("email"))
 		m.signals()
-		m.handler = nil
+		m.setHandler(nil)
+		m.advance(61 * time.Second)
 		_ = m.p.SendOTP(context.Background(), otpRequest("email"))
-		if m.sentCount() != 2 {
-			t.Fatal("refused send spent the hourly budget")
+		if m.sentCount() != 1 {
+			t.Fatal("a refused send must still spend the hourly budget")
 		}
 	})
 	t.Run("timeout keeps the challenge and signals", func(t *testing.T) {
 		m := newMessagingFixture(t, nil)
-		m.handler = func(w http.ResponseWriter, r *http.Request) {
+		m.setHandler(func(w http.ResponseWriter, r *http.Request) {
 			select {
 			case <-time.After(3 * time.Second):
 			case <-r.Context().Done():
 			}
-		}
+		})
 		start := time.Now()
 		if err := m.p.SendOTP(context.Background(), otpRequest("email")); err != nil {
 			t.Fatalf("want nil, got %v", err)
@@ -430,17 +460,17 @@ func TestMessagingSendFailuresAreSilentAndSignalled(t *testing.T) {
 	})
 	t.Run("rejected token is replaced", func(t *testing.T) {
 		m := newMessagingFixture(t, nil)
-		m.handler = func(w http.ResponseWriter, _ *http.Request) {
+		m.setHandler(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusUnauthorized)
 			fmt.Fprint(w, `{"code":"authentication.refused"}`)
-		}
+		})
 		if err := m.p.SendOTP(context.Background(), otpRequest("email")); err != nil {
 			t.Fatal(err)
 		}
 		m.signals()
 		before := m.tokenCalls.Load()
-		m.now = m.now.Add(2 * time.Minute)
-		m.handler = nil
+		m.advance(2 * time.Minute)
+		m.setHandler(nil)
 		if err := m.p.SendOTP(context.Background(), otpRequest("email")); err != nil {
 			t.Fatal(err)
 		}
@@ -449,18 +479,19 @@ func TestMessagingSendFailuresAreSilentAndSignalled(t *testing.T) {
 			t.Fatal("rejected Messaging token was reused")
 		}
 	})
-	t.Run("BREG unavailable is an error and refunds the budget", func(t *testing.T) {
+	t.Run("BREG unavailable is an error and still spends the budget", func(t *testing.T) {
 		m := newMessagingFixture(t, func(c *Config) { c.Messaging.MaxSendsPerHour = 1 })
-		m.lookup = func(w http.ResponseWriter) {
+		m.setLookup(func(w http.ResponseWriter) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			fmt.Fprint(w, `{"code":"source.unavailable"}`)
-		}
+		})
 		if err := m.p.SendOTP(context.Background(), otpRequest("email")); err != ErrUnavailable || m.sentCount() != 0 {
 			t.Fatal("BREG outage not reported as unavailable")
 		}
-		m.lookup = nil
-		if err := m.p.SendOTP(context.Background(), otpRequest("email")); err != nil || m.sentCount() != 1 {
-			t.Fatal("BREG outage spent the hourly budget")
+		m.setLookup(nil)
+		m.advance(61 * time.Second)
+		if err := m.p.SendOTP(context.Background(), otpRequest("email")); err != nil || m.sentCount() != 0 {
+			t.Fatal("a request during a BREG outage must still spend the hourly budget")
 		}
 	})
 }
@@ -478,16 +509,16 @@ func TestMessagingOutwardResultIsIdenticalForKnownAndUnknown(t *testing.T) {
 		event OperatorEvent
 	}{
 		{"messaging 429", func(m *messagingFixture) {
-			m.handler = func(w http.ResponseWriter, _ *http.Request) {
+			m.setHandler(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Retry-After", "1")
 				w.WriteHeader(http.StatusTooManyRequests)
 				fmt.Fprint(w, `{"code":"rate-limit.exceeded"}`)
-			}
+			})
 		}, EventSendRefused},
 		{"challenge store full", func(m *messagingFixture) {
 			v := m.verifier()
 			for i := 0; i < v.maxPending; i++ {
-				v.pending[challengeKey{identifier: fmt.Sprintf("filler-%d", i)}] = challenge{expires: m.now.Add(time.Minute)}
+				v.pending[challengeKey{identifier: fmt.Sprintf("filler-%d", i)}] = challenge{expires: m.clock().Add(time.Minute)}
 			}
 		}, EventStoreFull},
 		{"send queue full", func(m *messagingFixture) { m.verifier().slots = make(chan struct{}) }, EventSendDropped},
@@ -496,7 +527,7 @@ func TestMessagingOutwardResultIsIdenticalForKnownAndUnknown(t *testing.T) {
 			m := newMessagingFixture(t, nil)
 			tc.setup(m)
 			known := m.p.SendOTP(context.Background(), otpRequest("email"))
-			m.lookup = unknown
+			m.setLookup(unknown)
 			r := otpRequest("email")
 			r.Identifier = "nobody"
 			gone := m.p.SendOTP(context.Background(), r)
@@ -514,10 +545,10 @@ func TestMessagingSendQueueIsBounded(t *testing.T) {
 	m := newMessagingFixture(t, func(c *Config) { c.Messaging.MaxSendsPerHour = 60 })
 	m.verifier().slots = make(chan struct{}, 2)
 	release := make(chan struct{})
-	m.handler = func(w http.ResponseWriter, _ *http.Request) {
+	m.setHandler(func(w http.ResponseWriter, _ *http.Request) {
 		<-release
 		w.WriteHeader(http.StatusAccepted)
-	}
+	})
 	r := otpRequest("email")
 	for i := 0; i < 3; i++ {
 		r.Binding.TransactionID = fmt.Sprintf("tx-%d", i)
@@ -532,15 +563,15 @@ func TestMessagingSendQueueIsBounded(t *testing.T) {
 	if events := m.signals(); len(events) != 1 || events[0] != EventSendDropped {
 		t.Fatalf("wrong events %v", events)
 	}
-	if len(m.verifier().pending) != 2 {
-		t.Fatal("dropped send left a challenge")
+	if len(m.verifier().pending) != 3 {
+		t.Fatal("every admitted request stores one challenge, sent or dropped")
 	}
 }
 
 // The operator signal carries only a fixed event kind.
 func TestMessagingSignalsCarryNoValues(t *testing.T) {
 	m := newMessagingFixture(t, nil)
-	m.handler = func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnprocessableEntity) }
+	m.setHandler(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnprocessableEntity) })
 	_ = m.p.SendOTP(context.Background(), otpRequest("email"))
 	code := m.lastCode(t)
 	for _, e := range m.signals() {
@@ -621,10 +652,10 @@ func TestMessagingContactValidationMatchesMessaging(t *testing.T) {
 
 func TestMessagingLimiterBounds(t *testing.T) {
 	m := newMessagingFixture(t, func(c *Config) { c.Messaging.MaxTrackedPeople = 20 })
-	m.lookup = func(w http.ResponseWriter) {
+	m.setLookup(func(w http.ResponseWriter) {
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"code":"lookup.unresolved"}`)
-	}
+	})
 	r := otpRequest("email")
 	for i := 0; i < 20; i++ {
 		r.Identifier = fmt.Sprintf("guess-%d", i)
@@ -636,13 +667,8 @@ func TestMessagingLimiterBounds(t *testing.T) {
 	if err := m.p.SendOTP(context.Background(), r); err != ErrUnavailable || !hasEvent(m.signals(), EventLimiterFull) {
 		t.Fatal("a full limiter must refuse and tell the operator")
 	}
-	// A person already tracked is not refused.
-	r.Identifier = "guess-0"
-	if err := m.p.SendOTP(context.Background(), r); err != nil {
-		t.Fatalf("tracked person refused: %v", err)
-	}
-	m.now = m.now.Add(time.Hour + time.Second)
-	m.lookup = nil
+	m.advance(time.Hour + time.Second)
+	m.setLookup(nil)
 	if err := m.p.SendOTP(context.Background(), otpRequest("email")); err != nil || m.sentCount() != 1 {
 		t.Fatal("limiter did not recover after the window")
 	}
@@ -659,7 +685,7 @@ func TestMessagingFailureLockout(t *testing.T) {
 		if err := m.p.SendOTP(context.Background(), otpRequest("email")); err != nil {
 			t.Fatal(err)
 		}
-		m.now = m.now.Add(61 * time.Second)
+		m.advance(61 * time.Second)
 	}
 	wrong := func(n int) {
 		for i := 0; i < n; i++ {
@@ -680,7 +706,7 @@ func TestMessagingFailureLockout(t *testing.T) {
 	if m.p.verifier.Verify(context.Background(), challengeFor(m.lastCode(t))) != ErrChallengeFailed {
 		t.Fatal("locked person's code accepted")
 	}
-	m.now = m.now.Add(time.Hour)
+	m.advance(time.Hour)
 	send()
 	if err := m.p.verifier.Verify(context.Background(), challengeFor(m.lastCode(t))); err != nil {
 		t.Fatalf("lock did not end with the window: %v", err)
@@ -702,8 +728,8 @@ func TestMessagingRefusedResendKeepsDeliveredCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := m.lastCode(t)
-	m.now = m.now.Add(61 * time.Second)
-	m.handler = func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTooManyRequests) }
+	m.advance(61 * time.Second)
+	m.setHandler(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTooManyRequests) })
 	if err := m.p.SendOTP(context.Background(), otpRequest("email")); err != nil {
 		t.Fatal(err)
 	}
@@ -715,14 +741,14 @@ func TestMessagingRefusedResendKeepsDeliveredCode(t *testing.T) {
 
 // A failure of an earlier send must not delete a challenge a later resend stored.
 func TestMessagingStaleFailureKeepsNewerChallenge(t *testing.T) {
-	m := newMessagingFixture(t, func(c *Config) { c.Messaging.ResendCooldownSeconds = 1 })
+	m := newMessagingFixture(t, func(c *Config) { c.Messaging.ResendCooldownSeconds = 2 })
 	v := m.verifier()
 	key := challengeKey{"subject-canary", "uin", binding()}
 	_, first, _ := v.generate()
 	previous, replaced := v.swap(key, first)
 	_, second, _ := v.generate()
 	v.swap(key, second)
-	v.undo(key, first, previous, replaced)
+	v.restore(key, first, previous, replaced)
 	if _, ok := v.pending[key]; !ok || v.pending[key].salt != second.salt {
 		t.Fatal("stale failure removed the newer challenge")
 	}
@@ -884,7 +910,7 @@ messaging:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Messaging.CodeTTLSeconds != 300 || c.Messaging.ResendCooldownSeconds != 60 || c.Messaging.MaxSendsPerHour != 5 || c.Messaging.MaxTrackedPeople != 100000 || c.Messaging.MaxPendingCodes != 1024 || c.Messaging.Channels["email"].TemplateVersion != "1" {
+	if c.Messaging.CodeTTLSeconds != 300 || c.Messaging.ResendCooldownSeconds != 60 || c.Messaging.MaxSendsPerHour != 5 || c.Messaging.MaxTrackedPeople != 100000 || c.Messaging.MaxPendingCodes != 100000 || c.Messaging.Channels["email"].TemplateVersion != "1" {
 		t.Fatalf("wrong defaults: %+v", c.Messaging)
 	}
 	p, err := New(c)

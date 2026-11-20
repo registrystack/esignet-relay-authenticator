@@ -96,11 +96,19 @@ only a salted digest in memory.
 A request for a code gives the same result for a known person, an unknown or
 ineligible person, one with no contact for the channel, and a person held by a
 resend limit. The Messaging call runs after that result is returned, so neither
-its outcome nor its duration depends on who exists. A failed send is visible only
-to the operator, through `provider.WithOperatorSignal`, which receives a fixed
-event kind and never a code, contact, identifier or Messaging response. A full
-challenge store or limiter refuses every request alike. Resends, hourly sends
-and failed verifications are limited per person, and every limit is bounded. See
+its outcome nor its duration depends on who exists. What the relay stores is a
+function of the requests it received, never of what BREG or Messaging answered.
+Every admitted request spends its cooldown and hourly budget and stores one
+pending entry, and nothing is refunded. The relay does no different work for
+known and unknown people. BREG's own lookup may still take longer for a found
+record, so keep BREG's response time in mind when you rely on this.
+
+A failed send is visible only to the operator. The shipped image logs one fixed
+line per event kind. Library users receive the same kinds through
+`provider.WithOperatorSignal`. Neither carries a code, contact, identifier or
+Messaging response. A full challenge store or limiter refuses every request
+alike, including people already tracked. Resends, hourly sends and failed
+verifications are limited per person, and every limit is bounded. See
 [configuration](docs/esignet-configuration.md#registry-messaging-production) for
 the bounds and what a bound costs.
 
@@ -110,9 +118,10 @@ so the exposure is a live code during its validity for whoever can read
 Messaging's database or backups, and for the email or SMS provider. Choose a
 short payload retention period if that matters to your deployment.
 
-Pending codes live in the memory of one provider process. Run one replica, or
-use sticky routing, and expect a restart to drop pending codes. A person then
-asks for a new one.
+Pending codes and limits live in the memory of one provider process. Run one
+replica, or route each eSignet session to the same replica. Per-person limits
+multiply by the number of replicas, and a restart drops pending codes. A person
+then asks for a new one.
 
 The Go `provider.ChallengeVerifier` interface remains the extension seam for an
 institution that brings its own sender, through `provider.WithChallengeVerifier`.
